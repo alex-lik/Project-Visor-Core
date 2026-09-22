@@ -31,6 +31,7 @@
     "start": "next start",
     "lint": "next lint",
     "test": "node scripts/test-multi-containers.mjs && node scripts/test-multiuser-and-tokens.mjs && node scripts/test-opencode-integration.mjs && node scripts/test-opencode-524-recovery.mjs",
+    "test:qa": "node scripts/test-qa-defects.mjs",
     "lint:commit": "node scripts/check-commit-msg.mjs",
     "release": "node scripts/release.mjs",
     "db:generate": "drizzle-kit generate",

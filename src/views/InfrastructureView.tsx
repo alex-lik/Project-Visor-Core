@@ -18,6 +18,7 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import CreateHostModal from '@/components/CreateHostModal';
+import { copyToClipboard } from '@/lib/utils';
 
 interface HostedProject {
   id: string;
@@ -65,6 +66,7 @@ export interface InfrastructureViewProps {
 export default function InfrastructureView({ headerActionSlot }: InfrastructureViewProps) {
   const [hosts, setHosts] = useState<Host[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isRestricted, setIsRestricted] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingHost, setEditingHost] = useState<Host | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -72,6 +74,10 @@ export default function InfrastructureView({ headerActionSlot }: InfrastructureV
   const fetchHosts = async () => {
     try {
       const res = await fetch('/api/hosts');
+      if (res.status === 403) {
+        setIsRestricted(true);
+        return;
+      }
       const data = await res.json();
       if (data.hosts) setHosts(data.hosts);
     } catch (err) {
@@ -91,10 +97,12 @@ export default function InfrastructureView({ headerActionSlot }: InfrastructureV
     }
   }, []);
 
-  const handleCopySsh = (text: string, id: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedId(id);
-    setTimeout(() => setCopiedId(null), 2000);
+  const handleCopySsh = async (text: string, id: string) => {
+    const success = await copyToClipboard(text);
+    if (success) {
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(null), 2000);
+    }
   };
 
   const handleDeleteHost = async (host: Host) => {
@@ -186,7 +194,32 @@ export default function InfrastructureView({ headerActionSlot }: InfrastructureV
       </div>
 
       {/* Host Cards */}
-      {hosts.length === 0 ? (
+      {isRestricted ? (
+        <div className="p-12 text-center rounded-2xl bg-[#0c121e] border border-amber-500/30">
+          <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 mx-auto mb-4">
+            <ShieldCheck className="w-7 h-7" />
+          </div>
+          <h3 className="text-lg font-bold text-white mb-1">Доступ ограничен</h3>
+          <p className="text-sm text-slate-400 max-w-md mx-auto">
+            У вашей учетной записи (роль Viewer) нет прав на просмотр и управление серверной инфраструктурой.
+          </p>
+        </div>
+      ) : loading ? (
+        <div className="space-y-4">
+          {[1, 2].map((i) => (
+            <div key={i} className="p-6 rounded-2xl bg-[#0c121e] border border-slate-800/80 animate-pulse space-y-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-slate-800" />
+                <div className="space-y-2 flex-1">
+                  <div className="h-4 bg-slate-800 rounded w-1/4" />
+                  <div className="h-3 bg-slate-850 rounded w-1/3" />
+                </div>
+              </div>
+              <div className="h-20 bg-slate-900/60 rounded-xl" />
+            </div>
+          ))}
+        </div>
+      ) : hosts.length === 0 ? (
         <div className="p-12 text-center rounded-2xl bg-[#0c121e] border border-slate-800/80">
           <div className="w-14 h-14 rounded-2xl bg-indigo-500/10 border border-indigo-500/30 flex items-center justify-center text-indigo-400 mx-auto mb-4">
             <Server className="w-7 h-7" />

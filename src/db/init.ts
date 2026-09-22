@@ -157,6 +157,7 @@ export async function ensureDatabaseInitialized() {
         can_write_kanban INTEGER NOT NULL DEFAULT 1,
         can_update_status INTEGER NOT NULL DEFAULT 1,
         can_view_infra INTEGER NOT NULL DEFAULT 0,
+        can_manage_projects INTEGER NOT NULL DEFAULT 0,
         created_at INTEGER NOT NULL,
         last_used_at INTEGER,
         expires_at INTEGER
@@ -189,6 +190,13 @@ export async function ensureDatabaseInitialized() {
         completed_at INTEGER
       );
     `);
+
+    // Safe migrations for newly added columns
+    try {
+      await client.execute('ALTER TABLE api_keys ADD COLUMN can_manage_projects INTEGER NOT NULL DEFAULT 0;');
+    } catch {
+      // column already exists
+    }
 
     // Ensure default admin user if none exists
     const usersCount = await client.execute('SELECT COUNT(*) as count FROM users');

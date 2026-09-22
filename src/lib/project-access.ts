@@ -100,12 +100,14 @@ export async function canUserEditProject(auth: AuthContext, projectId: string): 
   if (auth.isAdmin) return true;
 
   if (auth.isUser && auth.userId) {
+    if (auth.role === 'viewer') return false;
     const role = await getUserProjectRole(auth.userId, projectId, auth.isAdmin);
     return role === 'owner' || role === 'admin' || role === 'editor';
   }
 
   // For API agent tokens
   if (!auth.isUser) {
+    if (!auth.canUpdateStatus && !auth.canWriteKanban && !auth.canManageProjects) return false;
     const allowed = await getAccessibleProjectIds(auth);
     return allowed.includes(projectId);
   }
@@ -120,6 +122,7 @@ export async function canUserManageMembers(auth: AuthContext, projectId: string)
   if (auth.isAdmin) return true;
 
   if (auth.isUser && auth.userId) {
+    if (auth.role === 'viewer') return false;
     const role = await getUserProjectRole(auth.userId, projectId, auth.isAdmin);
     return role === 'owner' || role === 'admin';
   }

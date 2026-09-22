@@ -5,6 +5,12 @@ import { db } from '@/db';
 import { users } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 
+if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
+  console.warn(
+    '[SECURITY WARNING] JWT_SECRET is not configured in production environment! Using default fallback secret. Please define JWT_SECRET in .env.local'
+  );
+}
+
 const JWT_SECRET = new TextEncoder().encode(
   process.env.JWT_SECRET || 'visor-super-secret-key-change-in-production-2026'
 );

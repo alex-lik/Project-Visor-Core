@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { X, KeyRound, Copy, Check, Shield, AlertTriangle } from 'lucide-react';
+import { copyToClipboard } from '@/lib/utils';
 
 interface ProjectOption {
   id: string;
@@ -19,7 +20,8 @@ export default function CreateApiKeyModal({
 }) {
   const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [name, setName] = useState('');
-  const [roleScope, setRoleScope] = useState<'all_projects' | 'scoped_projects'>('scoped_projects');
+  // F-07: Default to 'all_projects' so key generation succeeds immediately without empty scoped selection error
+  const [roleScope, setRoleScope] = useState<'all_projects' | 'scoped_projects'>('all_projects');
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
   const [canWriteKanban, setCanWriteKanban] = useState(true);
   const [canUpdateStatus, setCanUpdateStatus] = useState(true);
@@ -52,11 +54,13 @@ export default function CreateApiKeyModal({
     );
   };
 
-  const handleCopy = () => {
+  const handleCopy = async () => {
     if (createdKey) {
-      navigator.clipboard.writeText(createdKey);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      const success = await copyToClipboard(createdKey);
+      if (success) {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }
     }
   };
 

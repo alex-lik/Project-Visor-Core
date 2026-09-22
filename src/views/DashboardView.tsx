@@ -130,10 +130,6 @@ export default function DashboardView() {
     }
   };
 
-  const totalContainers = projects.reduce(
-    (acc, p) => acc + ((p as any).containers?.length || 1),
-    0
-  );
   const onlineHosts = hosts.filter((h) => h.status === 'online').length;
   const opencodeHosts = hosts.filter((h) => h.opencodeEnabled).length;
   const portConflictsCount = hosts.filter((h) => h.hasPortConflict).length;

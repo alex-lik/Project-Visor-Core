@@ -150,6 +150,7 @@ export const apiKeys = sqliteTable('api_keys', {
   canWriteKanban: integer('can_write_kanban').notNull().default(1),
   canUpdateStatus: integer('can_update_status').notNull().default(1),
   canViewInfra: integer('can_view_infra').notNull().default(0),
+  canManageProjects: integer('can_manage_projects').notNull().default(0),
   createdAt: integer('created_at').notNull(),
   lastUsedAt: integer('last_used_at'),
   expiresAt: integer('expires_at'),

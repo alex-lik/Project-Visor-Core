@@ -17,6 +17,7 @@ export interface AuthContext {
   canWriteKanban: boolean;
   canUpdateStatus: boolean;
   canViewInfra: boolean;
+  canManageProjects: boolean;
 }
 
 export function hashApiKey(key: string): string {
@@ -114,6 +115,7 @@ export async function authenticateRequest(request: Request): Promise<AuthContext
       canWriteKanban: Boolean(keyRecord.canWriteKanban),
       canUpdateStatus: Boolean(keyRecord.canUpdateStatus),
       canViewInfra: Boolean(keyRecord.canViewInfra),
+      canManageProjects: Boolean((keyRecord as any).canManageProjects),
     };
   }
 
@@ -122,6 +124,7 @@ export async function authenticateRequest(request: Request): Promise<AuthContext
   if (user) {
     let allowedIds: string[] = [];
     const isAdmin = user.role === 'admin';
+    const isViewer = user.role === 'viewer';
 
     if (!isAdmin) {
       const owned = await db
@@ -145,9 +148,10 @@ export async function authenticateRequest(request: Request): Promise<AuthContext
       isAdmin,
       roleScope: isAdmin ? 'all_projects' : 'scoped_projects',
       allowedProjectIds: allowedIds,
-      canWriteKanban: true,
-      canUpdateStatus: true,
-      canViewInfra: true,
+      canWriteKanban: !isViewer,
+      canUpdateStatus: !isViewer,
+      canViewInfra: isAdmin,
+      canManageProjects: !isViewer,
     };
   }
 

@@ -3,6 +3,7 @@ import { db } from '@/db';
 import { projects, hosts, deployments, kanbanTasks, activityLogs, users } from '@/db/schema';
 import { authenticateRequest, isProjectAllowed } from '@/lib/rbac';
 import { normalizeContainers } from '@/lib/containers';
+import { slugify } from '@/lib/utils';
 import { nanoid } from 'nanoid';
 import { desc, eq } from 'drizzle-orm';
 
@@ -70,6 +71,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  // F-01 & F-04: Viewers and unauthorized API keys cannot create projects
+  if (!auth.canManageProjects) {
+    return NextResponse.json(
+      { error: 'Forbidden: Insufficient permissions to create projects' },
+      { status: 403 }
+    );
+  }
+
   try {
     const body = await req.json();
     const {
@@ -92,11 +101,21 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Название проекта обязательно' }, { status: 400 });
     }
 
-    const baseSlug = slug
-      ? slug.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-')
-      : title.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+    // F-05: Proper Cyrillic transliteration and collision fallback
+    const userSlug = slug?.trim();
+    let baseSlug = userSlug ? slugify(userSlug) : slugify(title);
+    if (!baseSlug) {
+      baseSlug = `proj-${nanoid(6)}`;
+    }
 
-    const finalSlug = baseSlug || `proj-${nanoid(6)}`;
+    // Check slug collision
+    const [existingSlug] = await db
+      .select({ id: projects.id })
+      .from(projects)
+      .where(eq(projects.slug, baseSlug))
+      .limit(1);
+
+    const finalSlug = existingSlug ? `${baseSlug}-${nanoid(4)}` : baseSlug;
     const projectId = `proj_${nanoid(10)}`;
 
     await db.insert(projects).values({

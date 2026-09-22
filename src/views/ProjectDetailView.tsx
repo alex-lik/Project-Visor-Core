@@ -448,11 +448,32 @@ export default function ProjectDetailView({ bannerSlot, headerActionSlot, params
     }
   };
 
-  const copyToClipboard = (text: string, id: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedDiffId(id);
-    setTimeout(() => setCopiedDiffId(null), 2000);
-  };
+  const copyToClipboard = async (text: string, id: string) => {
+    let ok = false;
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        ok = true;
+      }
+    } catch {}
+    if (!ok) {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.left = "-9999px";
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        ok = document.execCommand("copy");
+        document.body.removeChild(ta);
+      } catch {}
+    }
+    if (ok) {
+      setCopiedDiffId(id);
+      setTimeout(() => setCopiedDiffId(null), 2000);
+    }
+  };
 
   useEffect(() => {
     fetchProject();

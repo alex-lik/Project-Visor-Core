@@ -180,3 +180,71 @@ export const SECRETS_TYPE_LABELS: Record<string, { label: string; badge: string;
   },
 };
 
+/**
+ * Transliterates Cyrillic text to Latin, replaces non-alphanumeric characters,
+ * collapses consecutive hyphens, and trims hyphens from edges.
+ */
+export function slugify(text: string): string {
+  if (!text) return '';
+  const cyrillicMap: Record<string, string> = {
+    а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'yo', ж: 'zh',
+    з: 'z', и: 'i', й: 'y', к: 'k', л: 'l', м: 'm', н: 'n', о: 'o',
+    п: 'p', р: 'r', с: 's', т: 't', у: 'u', ф: 'f', х: 'kh', ц: 'ts',
+    ч: 'ch', ш: 'sh', щ: 'shch', ъ: '', ы: 'y', ь: '', э: 'e', ю: 'yu',
+    я: 'ya',
+    і: 'i', ї: 'yi', є: 'ye', ґ: 'g',
+  };
+
+  const str = text.toLowerCase().trim();
+  let result = '';
+  for (const char of str) {
+    if (cyrillicMap[char] !== undefined) {
+      result += cyrillicMap[char];
+    } else {
+      result += char;
+    }
+  }
+
+  return result
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+/**
+ * Robust clipboard copy with navigator.clipboard and execCommand textarea fallback.
+ * Returns true on actual success, false on failure.
+ */
+export async function copyToClipboard(text: string): Promise<boolean> {
+  if (!text) return false;
+  if (typeof window === 'undefined') return false;
+
+  // 1. Try modern navigator.clipboard
+  if (navigator?.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Fallback below
+    }
+  }
+
+  // 2. Fallback using temporary textarea
+  try {
+    const textArea = document.createElement('textarea');
+    textArea.value = text;
+    textArea.style.position = 'fixed';
+    textArea.style.left = '-9999px';
+    textArea.style.top = '-9999px';
+    textArea.setAttribute('readonly', '');
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+    const successful = document.execCommand('copy');
+    document.body.removeChild(textArea);
+    return successful;
+  } catch {
+    return false;
+  }
+}
+

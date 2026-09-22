@@ -17,6 +17,11 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  // F-02: Only admins can view the full users list
+  if (!auth.isAdmin) {
+    return NextResponse.json({ error: 'Forbidden: Admin access required' }, { status: 403 });
+  }
+
   const allUsers = await db.select().from(users).orderBy(desc(users.createdAt));
 
   const safeUsers = allUsers.map((u) => ({
@@ -88,7 +93,7 @@ export async function POST(req: NextRequest) {
         role,
         email: email?.trim() || null,
       },
-    });
+    }, { status: 201 });
   } catch (err: any) {
     return NextResponse.json({ error: err.message || 'Ошибка создания пользователя' }, { status: 500 });
   }

@@ -72,6 +72,7 @@ export async function POST(req: NextRequest) {
       canWriteKanban = true,
       canUpdateStatus = true,
       canViewInfra = false,
+      canManageProjects = false,
       expiresInDays,
     } = body;
 
@@ -103,6 +104,7 @@ export async function POST(req: NextRequest) {
       canWriteKanban: canWriteKanban ? 1 : 0,
       canUpdateStatus: canUpdateStatus ? 1 : 0,
       canViewInfra: canViewInfra ? 1 : 0,
+      canManageProjects: canManageProjects ? 1 : 0,
       createdAt: Date.now(),
       lastUsedAt: null,
       expiresAt,
