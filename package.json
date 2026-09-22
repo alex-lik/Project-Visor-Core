@@ -1,0 +1,65 @@
+{
+  "name": "@project-visor/core",
+  "version": "1.0.0",
+  "private": false,
+  "description": "Open-Source Developer Control Plane, Infrastructure Matrix & OpenCode Hub",
+  "license": "AGPL-3.0",
+  "author": "Alex <1987lex@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alex-lik/Project-Visor-Core.git"
+  },
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./db": "./src/db/index.ts",
+    "./schema": "./src/db/schema.ts",
+    "./opencode": "./src/lib/opencode.ts",
+    "./containers": "./src/lib/containers.ts",
+    "./notifications": "./src/lib/notifications.ts",
+    "./rbac": "./src/lib/rbac.ts",
+    "./auth": "./src/lib/auth.ts",
+    "./utils": "./src/lib/utils.ts",
+    "./version": "./src/lib/version.ts",
+    "./components/*": "./src/components/*",
+    "./views/*": "./src/views/*",
+    "./controllers/*": "./src/controllers/*"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "test": "node scripts/test-multi-containers.mjs && node scripts/test-multiuser-and-tokens.mjs && node scripts/test-opencode-integration.mjs && node scripts/test-opencode-524-recovery.mjs",
+    "lint:commit": "node scripts/check-commit-msg.mjs",
+    "release": "node scripts/release.mjs",
+    "db:generate": "drizzle-kit generate",
+    "db:push": "drizzle-kit push",
+    "db:seed": "node scripts/seed.mjs"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.14.0",
+    "bcryptjs": "^3.0.2",
+    "clsx": "^2.1.1",
+    "drizzle-orm": "^0.39.3",
+    "jose": "^6.0.8",
+    "lucide-react": "^1.16.0",
+    "nanoid": "^5.1.3",
+    "next": "^16.3.5",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "recharts": "^2.15.1",
+    "tailwind-merge": "^3.0.2"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/node": "^22.13.9",
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.4",
+    "autoprefixer": "^10.4.20",
+    "drizzle-kit": "^0.30.5",
+    "postcss": "^8.5.3",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.8.2"
+  }
+}

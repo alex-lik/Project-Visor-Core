@@ -1,0 +1,40 @@
+# Зависимости и артефакты сборки — ставятся/генерируются внутри стадий deps/builder
+node_modules
+.next
+
+# VCS и CI — не нужны ни сборке, ни рантайму
+.git
+.github
+.kilo
+.gitattributes
+
+# Локальные данные: живая SQLite (db/wal/shm) и бэкапы постоянно меняются —
+# именно они инвалидировали слой `COPY . .` при КАЖДОЙ пересборке.
+# В прод-контейнере /app/data монтируется volume из docker-compose.yml
+data
+
+# Документация и скрипты тестов/релизов — не участвуют в `next build`,
+# но их правки раньше тоже сбрасывали кэш builder-стадии
+docs
+scripts
+*.md
+
+# Локальный tooling и логи
+.vscode
+coverage
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Секреты никогда не запекаем в образ (прокидываются через environment/volume)
+.env
+.env*.local
+
+# Файлы оркестрации — не нужны внутри образа
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Конфиг Prometheus монтируется volume'ом из хоста (см. docker-compose.yml),
+# в образ приложения он не нужен
+prometheus.yml

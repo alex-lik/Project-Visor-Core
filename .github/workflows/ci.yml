@@ -1,0 +1,57 @@
+name: CI / Visor Core Quality Pipeline
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*.*.*' ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  validate-and-build:
+    name: Lint, Test & Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate Conventional Commits
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            for commit in $(git rev-list ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}); do
+              MSG=$(git log -1 --pretty=%B $commit)
+              node scripts/check-commit-msg.mjs "$MSG"
+            done
+          else
+            node scripts/check-commit-msg.mjs
+          fi
+
+      - name: Run Multi-Containers & Ports Suite
+        run: node scripts/test-multi-containers.mjs
+
+      - name: Run Multi-User & Scoped Tokens RBAC Suite
+        run: node scripts/test-multiuser-and-tokens.mjs
+
+      - name: Run OpenCode Server Integration Suite
+        run: node scripts/test-opencode-integration.mjs
+
+      - name: Run OpenCode 524 Recovery & Host API Suite
+        run: node scripts/test-opencode-524-recovery.mjs
+
+      - name: Build Next.js Application
+        run: npm run build
+
+      - name: Verify Dockerfile Build
+        run: docker build -t visor-core-test:ci .
