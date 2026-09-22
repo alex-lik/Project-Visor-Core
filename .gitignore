@@ -11,6 +11,8 @@ coverage/
 out/
 build/
 dist/
+AGENTS.md
+CLAUDE.md
 
 # misc & OS
 .DS_Store
