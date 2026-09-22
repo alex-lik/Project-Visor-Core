@@ -176,3 +176,78 @@ export function extractPorts(containers: ProjectContainer[]): Array<{
       portType: c.portType || 'http',
     }));
 }
+
+/**
+ * Parses legacy container definitions or raw JSON string.
+ */
+export function parseLegacyContainers(raw: any): ProjectContainer[] {
+  return normalizeContainers(raw);
+}
+
+/**
+ * Validates a container list for internal port conflicts and invalid port ranges.
+ */
+export function validateContainers(containers: any[]): { valid: boolean; errors: string[] } {
+  const errors: string[] = [];
+  if (!Array.isArray(containers)) {
+    return { valid: false, errors: ['Containers must be an array'] };
+  }
+  const portsSeen = new Set<number>();
+  for (const c of containers) {
+    if (!c.name || typeof c.name !== 'string') {
+      errors.push('Each container must have a non-empty name');
+    }
+    if (c.port != null) {
+      const p = Number(c.port);
+      if (isNaN(p) || p < 1 || p > 65535) {
+        errors.push(`Invalid port ${c.port} for service "${c.name || 'unknown'}"`);
+      } else if (portsSeen.has(p)) {
+        errors.push(`Duplicate port :${p} within the same project`);
+      } else {
+        portsSeen.add(p);
+      }
+    }
+  }
+  return { valid: errors.length === 0, errors };
+}
+
+/**
+ * Resolves the primary public HTTP/HTTPS port of a project.
+ */
+export function getPublicHttpPort(containers: ProjectContainer[]): number | null {
+  const publicHttp = containers.find(
+    (c) => c.isPublic && (c.portType === 'http' || c.portType === 'https') && c.port
+  );
+  if (publicHttp && publicHttp.port) return Number(publicHttp.port);
+  const anyHttp = containers.find(
+    (c) => (c.portType === 'http' || c.portType === 'https') && c.port
+  );
+  if (anyHttp && anyHttp.port) return Number(anyHttp.port);
+  const first = containers.find((c) => c.port);
+  return first && first.port ? Number(first.port) : null;
+}
+
+/**
+ * Detects conflicted ports across different projects hosted on the same host.
+ */
+export function detectHostPortConflicts(
+  portsList: Array<{ projectId?: string; port?: number | null; name?: string }>
+): number[] {
+  const portToProjects = new Map<number, Set<string>>();
+  for (const item of portsList) {
+    if (item.port && typeof item.port === 'number') {
+      const p = Number(item.port);
+      if (!portToProjects.has(p)) {
+        portToProjects.set(p, new Set());
+      }
+      portToProjects.get(p)!.add(item.projectId || item.name || 'default');
+    }
+  }
+  const conflicts: number[] = [];
+  for (const [port, projectIds] of portToProjects.entries()) {
+    if (projectIds.size > 1) {
+      conflicts.push(port);
+    }
+  }
+  return conflicts;
+}

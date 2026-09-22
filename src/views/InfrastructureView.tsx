@@ -83,6 +83,12 @@ export default function InfrastructureView({ headerActionSlot }: InfrastructureV
 
   useEffect(() => {
     fetchHosts();
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('create') === '1' || params.get('new') === '1') {
+        setIsModalOpen(true);
+      }
+    }
   }, []);
 
   const handleCopySsh = (text: string, id: string) => {
@@ -139,11 +145,12 @@ export default function InfrastructureView({ headerActionSlot }: InfrastructureV
         <div className="flex items-center gap-2.5 self-start md:self-auto">
           {headerActionSlot}
           <button
+            type="button"
             onClick={() => {
               setEditingHost(null);
               setIsModalOpen(true);
             }}
-            className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-white text-xs font-semibold shadow-lg shadow-cyan-500/20 transition-all flex items-center gap-1.5"
+            className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-white text-xs font-semibold shadow-lg shadow-cyan-500/20 transition-all flex items-center gap-1.5 cursor-pointer"
           >
             <Plus className="w-4 h-4" /> Добавить сервер
           </button>
@@ -179,9 +186,30 @@ export default function InfrastructureView({ headerActionSlot }: InfrastructureV
       </div>
 
       {/* Host Cards */}
-      <div className="space-y-4">
-        {hosts.map((h) => {
-          const sshCmd = h.sshAlias || (h.ipAddress ? `ssh ${h.sshUser}@${h.ipAddress} -p ${h.sshPort}` : '');
+      {hosts.length === 0 ? (
+        <div className="p-12 text-center rounded-2xl bg-[#0c121e] border border-slate-800/80">
+          <div className="w-14 h-14 rounded-2xl bg-indigo-500/10 border border-indigo-500/30 flex items-center justify-center text-indigo-400 mx-auto mb-4">
+            <Server className="w-7 h-7" />
+          </div>
+          <h3 className="text-lg font-bold text-white mb-1">Серверы не добавлены</h3>
+          <p className="text-sm text-slate-400 max-w-md mx-auto mb-6">
+            Добавьте ваш первый VPS или локальный сервер для мониторинга ресурсов, управления контейнерами и запуска OpenCode.
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              setEditingHost(null);
+              setIsModalOpen(true);
+            }}
+            className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-white text-sm font-semibold shadow-lg shadow-cyan-500/20 transition-all inline-flex items-center gap-2 cursor-pointer"
+          >
+            <Plus className="w-4 h-4" /> Добавить сервер
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {hosts.map((h) => {
+            const sshCmd = h.sshAlias || (h.ipAddress ? `ssh ${h.sshUser}@${h.ipAddress} -p ${h.sshPort}` : '');
 
           return (
             <div
@@ -384,7 +412,8 @@ export default function InfrastructureView({ headerActionSlot }: InfrastructureV
             </div>
           );
         })}
-      </div>
+        </div>
+      )}
 
       {/* Modal */}
       <CreateHostModal

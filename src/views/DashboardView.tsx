@@ -22,6 +22,7 @@ import {
 import { STATUS_COLORS, formatDateTime } from '@/lib/utils';
 import CreateProjectModal from '@/components/CreateProjectModal';
 import CreateTaskModal from '@/components/CreateTaskModal';
+import CreateHostModal from '@/components/CreateHostModal';
 import OnboardingWizard from '@/components/OnboardingWizard';
 
 interface ProjectItem {
@@ -84,6 +85,7 @@ export default function DashboardView() {
   // Modals
   const [isProjectModalOpen, setIsProjectModalOpen] = useState(false);
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
+  const [isHostModalOpen, setIsHostModalOpen] = useState(false);
 
   const loadData = async () => {
     try {
@@ -143,7 +145,7 @@ export default function DashboardView() {
         hostsCount={hosts.length}
         projectsCount={projects.length}
         opencodeHostsCount={opencodeHosts}
-        onOpenCreateHost={() => router.push('/infrastructure')}
+        onOpenCreateHost={() => setIsHostModalOpen(true)}
         onOpenCreateProject={() => setIsProjectModalOpen(true)}
       />
 
@@ -427,6 +429,12 @@ export default function DashboardView() {
       <CreateTaskModal
         isOpen={isTaskModalOpen}
         onClose={() => setIsTaskModalOpen(false)}
+        onCreated={() => loadData()}
+      />
+
+      <CreateHostModal
+        isOpen={isHostModalOpen}
+        onClose={() => setIsHostModalOpen(false)}
         onCreated={() => loadData()}
       />
     </div>
