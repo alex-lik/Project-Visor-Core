@@ -1,6 +1,6 @@
 {
   "name": "@project-visor/core",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "private": false,
   "description": "Open-Source Developer Control Plane, Infrastructure Matrix & OpenCode Hub",
   "license": "AGPL-3.0",
