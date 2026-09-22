@@ -2,43 +2,74 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db';
 import { users } from '@/db/schema';
 import { ensureDatabaseInitialized } from '@/db/init';
-import { createSessionToken } from '@/lib/auth';
+import { createSessionToken, hashPassword } from '@/lib/auth';
 import { eq } from 'drizzle-orm';
 
 /**
  * POST /api/auth/demo - 1-Click Demo Login for presentations, reviews, and client demos
+ * Security (V-01):
+ * - Disabled in production unless ENABLE_DEMO_LOGIN=true is set
+ * - Always issues a session with role: 'viewer', NEVER admin
  */
 export async function POST(req: NextRequest) {
   await ensureDatabaseInitialized();
 
-  try {
-    // Find admin user or create if not exists
-    let [adminUser] = await db.select().from(users).where(eq(users.role, 'admin')).limit(1);
+  // 1. Environment Gate: block in production unless explicitly permitted
+  if (process.env.NODE_ENV === 'production' && process.env.ENABLE_DEMO_LOGIN !== 'true') {
+    return NextResponse.json(
+      { error: 'Демо-режим отключен в производственной среде' },
+      { status: 403 }
+    );
+  }
 
-    if (!adminUser) {
-      // Re-run init to ensure admin user exists
-      await ensureDatabaseInitialized();
-      const [retryAdmin] = await db.select().from(users).where(eq(users.role, 'admin')).limit(1);
-      adminUser = retryAdmin;
+  try {
+    // 2. Find or create a dedicated restricted demo user with role 'viewer'
+    let [demoUser] = await db
+      .select()
+      .from(users)
+      .where(eq(users.username, 'demo_viewer'))
+      .limit(1);
+
+    if (!demoUser) {
+      const passwordHash = await hashPassword('demo_restricted_' + Date.now());
+      const demoUserId = 'usr_demo_viewer';
+      try {
+        await db.insert(users).values({
+          id: demoUserId,
+          username: 'demo_viewer',
+          passwordHash,
+          role: 'viewer',
+          createdAt: Date.now(),
+        });
+      } catch {
+        // User may have been inserted concurrently
+      }
+
+      const [created] = await db
+        .select()
+        .from(users)
+        .where(eq(users.username, 'demo_viewer'))
+        .limit(1);
+      demoUser = created;
     }
 
-    if (!adminUser) {
+    if (!demoUser) {
       return NextResponse.json({ error: 'Демо-пользователь не найден' }, { status: 500 });
     }
 
-    // Generate JWT session token
+    // 3. Generate JWT session token with viewer role
     const token = await createSessionToken({
-      userId: adminUser.id,
-      username: adminUser.username,
-      role: adminUser.role,
+      userId: demoUser.id,
+      username: demoUser.username,
+      role: 'viewer',
     });
 
     const response = NextResponse.json({
       success: true,
       user: {
-        id: adminUser.id,
-        username: adminUser.username,
-        role: adminUser.role,
+        id: demoUser.id,
+        username: demoUser.username,
+        role: 'viewer',
       },
     });
 

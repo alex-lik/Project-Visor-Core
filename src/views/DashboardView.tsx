@@ -116,17 +116,27 @@ export default function DashboardView() {
     loadData();
   }, []);
 
+  const [completingTaskId, setCompletingTaskId] = useState<string | null>(null);
+
   const handleCompleteTask = async (taskId: string) => {
+    setCompletingTaskId(taskId);
     try {
-      await fetch(`/api/kanban/tasks/${taskId}`, {
+      const res = await fetch(`/api/kanban/tasks/${taskId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ column: 'done' }),
       });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Ошибка завершения задачи');
+      }
       setInProgressTasks((prev) => prev.filter((t) => t.id !== taskId));
       loadData();
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      alert(err.message || 'Ошибка завершения задачи');
+    } finally {
+      setCompletingTaskId(null);
     }
   };
 
@@ -184,10 +194,19 @@ export default function DashboardView() {
             <span className="text-xs font-medium text-slate-400">Всего проектов</span>
             <FolderGit2 className="w-4 h-4 text-cyan-400" />
           </div>
-          <div className="text-2xl font-bold text-white mt-2">{projects.length}</div>
-          <div className="text-[11px] text-slate-500 mt-1 flex items-center gap-1">
-            <span>{projects.filter((p) => p.status === 'production').length} в продакшене</span>
-          </div>
+          {loading ? (
+            <div className="space-y-2 mt-2">
+              <div className="h-7 w-16 bg-slate-800 animate-pulse rounded" />
+              <div className="h-3 w-28 bg-slate-800/60 animate-pulse rounded" />
+            </div>
+          ) : (
+            <>
+              <div className="text-2xl font-bold text-white mt-2">{projects.length}</div>
+              <div className="text-[11px] text-slate-500 mt-1 flex items-center gap-1">
+                <span>{projects.filter((p) => p.status === 'production').length} в продакшене</span>
+              </div>
+            </>
+          )}
         </div>
 
         <div className="p-4 rounded-2xl bg-[#0c121e]/80 border border-slate-800/80 backdrop-blur-sm">
@@ -195,8 +214,17 @@ export default function DashboardView() {
             <span className="text-xs font-medium text-slate-400">В работе (Фокус)</span>
             <Zap className="w-4 h-4 text-amber-400" />
           </div>
-          <div className="text-2xl font-bold text-amber-300 mt-2">{inProgressTasks.length}</div>
-          <div className="text-[11px] text-slate-500 mt-1">активных задач прямо сейчас</div>
+          {loading ? (
+            <div className="space-y-2 mt-2">
+              <div className="h-7 w-12 bg-slate-800 animate-pulse rounded" />
+              <div className="h-3 w-32 bg-slate-800/60 animate-pulse rounded" />
+            </div>
+          ) : (
+            <>
+              <div className="text-2xl font-bold text-amber-300 mt-2">{inProgressTasks.length}</div>
+              <div className="text-[11px] text-slate-500 mt-1">активных задач прямо сейчас</div>
+            </>
+          )}
         </div>
 
         <div className="p-4 rounded-2xl bg-[#0c121e]/80 border border-slate-800/80 backdrop-blur-sm">
@@ -204,13 +232,22 @@ export default function DashboardView() {
             <span className="text-xs font-medium text-slate-400">Серверы / Хосты</span>
             <Server className="w-4 h-4 text-emerald-400" />
           </div>
-          <div className="text-2xl font-bold text-white mt-2">
-            {onlineHosts} <span className="text-xs font-normal text-slate-500">/ {hosts.length}</span>
-          </div>
-          <div className="text-[11px] text-emerald-400 mt-1 flex items-center gap-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-            {hosts.length > 0 ? `${Math.round((onlineHosts / hosts.length) * 100)}% онлайн` : 'Нет хостов'}
-          </div>
+          {loading ? (
+            <div className="space-y-2 mt-2">
+              <div className="h-7 w-20 bg-slate-800 animate-pulse rounded" />
+              <div className="h-3 w-24 bg-slate-800/60 animate-pulse rounded" />
+            </div>
+          ) : (
+            <>
+              <div className="text-2xl font-bold text-white mt-2">
+                {onlineHosts} <span className="text-xs font-normal text-slate-500">/ {hosts.length}</span>
+              </div>
+              <div className="text-[11px] text-emerald-400 mt-1 flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                {hosts.length > 0 ? `${Math.round((onlineHosts / hosts.length) * 100)}% онлайн` : 'Нет хостов'}
+              </div>
+            </>
+          )}
         </div>
 
         <div className="p-4 rounded-2xl bg-[#0c121e]/80 border border-slate-800/80 backdrop-blur-sm">
@@ -218,8 +255,17 @@ export default function DashboardView() {
             <span className="text-xs font-medium text-slate-400">OpenCode Хосты</span>
             <Terminal className="w-4 h-4 text-indigo-400" />
           </div>
-          <div className="text-2xl font-bold text-indigo-300 mt-2">{opencodeHosts}</div>
-          <div className="text-[11px] text-slate-500 mt-1">серверов с OpenCode</div>
+          {loading ? (
+            <div className="space-y-2 mt-2">
+              <div className="h-7 w-12 bg-slate-800 animate-pulse rounded" />
+              <div className="h-3 w-28 bg-slate-800/60 animate-pulse rounded" />
+            </div>
+          ) : (
+            <>
+              <div className="text-2xl font-bold text-indigo-300 mt-2">{opencodeHosts}</div>
+              <div className="text-[11px] text-slate-500 mt-1">серверов с OpenCode</div>
+            </>
+          )}
         </div>
       </div>
 
@@ -324,11 +370,13 @@ export default function DashboardView() {
 
                   <button
                     type="button"
+                    disabled={completingTaskId === task.id}
                     onClick={() => handleCompleteTask(task.id)}
                     title="Завершить задачу"
-                    className="p-2 rounded-lg bg-emerald-950/40 text-emerald-400 hover:bg-emerald-600 hover:text-white border border-emerald-800/40 transition-all text-xs flex items-center gap-1"
+                    aria-label="Завершить задачу"
+                    className="p-2 rounded-lg bg-emerald-950/40 text-emerald-400 hover:bg-emerald-600 hover:text-white border border-emerald-800/40 transition-all text-xs flex items-center gap-1 disabled:opacity-50"
                   >
-                    <CheckCircle2 className="w-4 h-4" />
+                    <CheckCircle2 className={`w-4 h-4 ${completingTaskId === task.id ? 'animate-spin' : ''}`} />
                   </button>
                 </div>
               ))}
