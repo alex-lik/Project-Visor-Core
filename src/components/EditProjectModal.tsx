@@ -145,7 +145,7 @@ export default function EditProjectModal({
             <div>
               <label className={labelCls}>Сайт (public URL)</label>
               <input
-                type="url"
+                type="text"
                 value={publicUrl}
                 onChange={(e) => setPublicUrl(e.target.value)}
                 placeholder="https://example.com"
@@ -155,7 +155,7 @@ export default function EditProjectModal({
             <div>
               <label className={labelCls}>Репозиторий</label>
               <input
-                type="url"
+                type="text"
                 value={repoUrl}
                 onChange={(e) => setRepoUrl(e.target.value)}
                 placeholder="https://github.com/org/repo"
@@ -165,7 +165,7 @@ export default function EditProjectModal({
             <div>
               <label className={labelCls}>Документация</label>
               <input
-                type="url"
+                type="text"
                 value={docUrl}
                 onChange={(e) => setDocUrl(e.target.value)}
                 placeholder="https://docs.example.com"
