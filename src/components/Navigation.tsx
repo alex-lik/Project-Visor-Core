@@ -14,6 +14,7 @@ import {
   Radio,
   Menu,
   X,
+  BotMessageSquare,
 } from 'lucide-react';
 import { APP_VERSION } from '@/lib/version';
 
@@ -25,6 +26,7 @@ export interface NavItemConfig {
 
 const DEFAULT_CORE_NAV_ITEMS: NavItemConfig[] = [
   { href: '/', label: 'Радар фокуса', icon: Compass },
+  { href: '/chat', label: 'AI Чат (OpenCode)', icon: BotMessageSquare },
   { href: '/projects', label: 'Проекты', icon: FolderGit2 },
   { href: '/tasks', label: 'Канбан доски', icon: Kanban },
   { href: '/graph', label: 'Граф связей', icon: Network },

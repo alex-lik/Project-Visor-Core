@@ -33,6 +33,7 @@ export { default as CreateRelationModal } from './components/CreateRelationModal
 export { default as CreateApiKeyModal } from './components/CreateApiKeyModal';
 export { default as ContainerCards } from './components/ContainerCards';
 export { default as AddonSpoiler } from './components/AddonSpoiler';
+export { default as OpenCodeChat } from './components/OpenCodeChat';
 
 // Views
 export { default as DashboardView } from './views/DashboardView';

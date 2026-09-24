@@ -13,6 +13,33 @@ export interface OpenCodeHostConfig {
 }
 
 /**
+ * Determines whether a hostname points to cloud metadata or link-local ranges (SSRF protection).
+ */
+export function isBlockedHost(hostname: string): boolean {
+  const lower = (hostname || '').toLowerCase().trim();
+  if (!lower) return false;
+  // Cloud metadata services & well-known internal endpoints
+  if (
+    lower === '169.254.169.254' ||
+    lower === 'metadata.google.internal' ||
+    lower === 'metadata.internal' ||
+    lower === '100.100.100.200' ||
+    lower === 'instance-data'
+  ) {
+    return true;
+  }
+  // Link-local IPv4 169.254.0.0/16
+  if (/^169\.254\.\d{1,3}\.\d{1,3}$/.test(lower)) {
+    return true;
+  }
+  // IPv6 link-local fe80::/10
+  if (lower.startsWith('fe80:')) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * Normalizes a user-entered host value: strips scheme, path, trailing slash and port.
  * Returns clean hostname plus any scheme/port explicitly embedded in the input.
  */
@@ -21,6 +48,11 @@ export function parseOpenCodeHostInput(
   fallback?: string | null
 ): { hostname: string; embeddedScheme?: 'http' | 'https'; embeddedPort?: number } {
   const source = (raw?.trim() || fallback?.trim() || '127.0.0.1').replace(/\/+$/, '');
+
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(source) && !/^(https?):\/\//i.test(source)) {
+    throw new Error('SSRF protection: only http and https protocols are supported');
+  }
+
   let rest = source;
   let embeddedScheme: 'http' | 'https' | undefined;
 
@@ -240,6 +272,31 @@ export async function discoverOpenCodeEndpoint(
   host: OpenCodeHostConfig,
   opts?: { timeoutMs?: number }
 ): Promise<OpenCodeDiscoveryResult> {
+  let parsed;
+  try {
+    parsed = parseOpenCodeHostInput(host.opencodeHost, host.ipAddress);
+  } catch (err: any) {
+    return {
+      healthy: false,
+      url: host.opencodeHost || host.ipAddress || '',
+      detectedPort: null,
+      detectedUseHttps: false,
+      attempted: [],
+      error: err.message,
+    };
+  }
+
+  if (isBlockedHost(parsed.hostname)) {
+    return {
+      healthy: false,
+      url: `http://${parsed.hostname}`,
+      detectedPort: null,
+      detectedUseHttps: false,
+      attempted: [],
+      error: `SSRF protection: access to metadata/link-local address '${parsed.hostname}' is blocked`,
+    };
+  }
+
   const timeoutMs = opts?.timeoutMs ?? 5000;
   const headers = buildOpenCodeHeaders(host);
   const candidates = buildOpenCodeCandidates(host);
@@ -316,6 +373,11 @@ export async function openCodeFetch(
   path: string,
   init?: RequestInit & { timeoutMs?: number }
 ): Promise<Response> {
+  const parsed = parseOpenCodeHostInput(host.opencodeHost, host.ipAddress);
+  if (isBlockedHost(parsed.hostname)) {
+    throw new Error(`SSRF protection: access to address '${parsed.hostname}' is blocked`);
+  }
+
   const primary = `${buildOpenCodeBaseUrl(host)}${path}`;
   const timeoutMs = init?.timeoutMs ?? 30000;
   const { timeoutMs: _omit, ...fetchInit } = init || {};
@@ -395,6 +457,456 @@ export async function listOpenCodeSessions(
   }
 }
 
+/**
+ * Updates an OpenCode session (e.g. title) on the OpenCode server
+ */
+export async function updateOpenCodeSession(
+  host: OpenCodeHostConfig,
+  sessionId: string,
+  update: { title?: string }
+): Promise<any> {
+  const res = await openCodeFetch(host, `/session/${sessionId}`, {
+    method: 'PATCH',
+    headers: buildOpenCodeHeaders(host),
+    body: JSON.stringify(update),
+    timeoutMs: 15000,
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`OpenCode session update failed (${res.status}): ${text}`);
+  }
+
+  return await res.json().catch(() => ({ success: true }));
+}
+
+/**
+ * Deletes an OpenCode session permanently from the OpenCode server
+ */
+export async function deleteOpenCodeSession(
+  host: OpenCodeHostConfig,
+  sessionId: string
+): Promise<boolean> {
+  const res = await openCodeFetch(host, `/session/${sessionId}`, {
+    method: 'DELETE',
+    headers: buildOpenCodeHeaders(host),
+    timeoutMs: 15000,
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`OpenCode session deletion failed (${res.status}): ${text}`);
+  }
+
+  return true;
+}
+
+/**
+ * Gets a single session detail from OpenCode server
+ */
+export async function getOpenCodeSession(
+  host: OpenCodeHostConfig,
+  sessionId: string
+): Promise<{ id: string; title?: string; directory?: string; model?: any; time?: any; [key: string]: any } | null> {
+  try {
+    const res = await openCodeFetch(host, `/session/${sessionId}`, {
+      method: 'GET',
+      headers: buildOpenCodeHeaders(host),
+      timeoutMs: 6000,
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (err) {
+    return null;
+  }
+}
+
+/**
+ * Aborts a running task/generation in an OpenCode session
+ */
+export async function abortOpenCodeSession(
+  host: OpenCodeHostConfig,
+  sessionId: string
+): Promise<boolean> {
+  try {
+    const res = await openCodeFetch(host, `/session/${sessionId}/abort`, {
+      method: 'POST',
+      headers: buildOpenCodeHeaders(host),
+      body: JSON.stringify({}),
+      timeoutMs: 8000,
+    });
+    return res.ok;
+  } catch (err) {
+    console.warn(`[OpenCode] Failed to abort session ${sessionId}:`, err);
+    return false;
+  }
+}
+
+/**
+ * Gets map of active session statuses (busy/idle) from OpenCode
+ */
+export async function getOpenCodeSessionStatuses(
+  host: OpenCodeHostConfig
+): Promise<Record<string, { type: 'busy' | 'idle' }>> {
+  try {
+    const res = await openCodeFetch(host, '/session/status', {
+      method: 'GET',
+      headers: buildOpenCodeHeaders(host),
+      timeoutMs: 5000,
+    });
+    if (!res.ok) return {};
+    return await res.json();
+  } catch (err) {
+    return {};
+  }
+}
+
+/**
+ * Creates a new session by forking an existing session at a specific message
+ */
+export async function forkOpenCodeSession(
+  host: OpenCodeHostConfig,
+  sessionId: string,
+  messageId?: string
+): Promise<any> {
+  const body: any = {};
+  if (messageId) body.messageID = messageId;
+  const res = await openCodeFetch(host, `/session/${sessionId}/fork`, {
+    method: 'POST',
+    headers: buildOpenCodeHeaders(host),
+    body: JSON.stringify(body),
+    timeoutMs: 12000,
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`OpenCode session fork failed (${res.status}): ${text}`);
+  }
+  return await res.json();
+}
+
+/**
+ * Generates a public share link for an OpenCode session
+ */
+export async function shareOpenCodeSession(
+  host: OpenCodeHostConfig,
+  sessionId: string
+): Promise<{ url?: string; [key: string]: any }> {
+  const res = await openCodeFetch(host, `/session/${sessionId}/share`, {
+    method: 'POST',
+    headers: buildOpenCodeHeaders(host),
+    body: JSON.stringify({}),
+    timeoutMs: 12000,
+  });
+  if (!res.ok) {
+    try {
+      const sessionRes = await openCodeFetch(host, `/session/${sessionId}`, {
+        method: 'GET',
+        headers: buildOpenCodeHeaders(host),
+        timeoutMs: 6000,
+      });
+      if (sessionRes.ok) {
+        const sData = await sessionRes.json();
+        if (sData.share?.url) {
+          return sData.share;
+        }
+      }
+    } catch {}
+    const text = await res.text();
+    throw new Error(`OpenCode session share failed (${res.status}): ${text}`);
+  }
+  const data = await res.json();
+  return data.share || data;
+}
+
+/**
+ * Revokes public share access for an OpenCode session
+ */
+export async function unshareOpenCodeSession(
+  host: OpenCodeHostConfig,
+  sessionId: string
+): Promise<boolean> {
+  const res = await openCodeFetch(host, `/session/${sessionId}/share`, {
+    method: 'DELETE',
+    headers: buildOpenCodeHeaders(host),
+    timeoutMs: 10000,
+  });
+  return res.ok;
+}
+
+/**
+ * Retrieves the AI-generated todo checklist for a session
+ */
+export async function getOpenCodeSessionTodo(
+  host: OpenCodeHostConfig,
+  sessionId: string
+): Promise<Array<{ content: string; status: 'pending' | 'in_progress' | 'completed' | string; priority?: string }>> {
+  try {
+    const res = await openCodeFetch(host, `/session/${sessionId}/todo`, {
+      method: 'GET',
+      headers: buildOpenCodeHeaders(host),
+      timeoutMs: 6000,
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data) ? data : [];
+  } catch (err) {
+    return [];
+  }
+}
+
+/**
+ * Reverts a message/step in an OpenCode session
+ */
+export async function revertOpenCodeMessage(
+  host: OpenCodeHostConfig,
+  sessionId: string,
+  messageId: string
+): Promise<any> {
+  const res = await openCodeFetch(host, `/session/${sessionId}/revert`, {
+    method: 'POST',
+    headers: buildOpenCodeHeaders(host),
+    body: JSON.stringify({ messageID: messageId }),
+    timeoutMs: 10000,
+  });
+  if (!res.ok) throw new Error(`Revert failed (${res.status})`);
+  return await res.json();
+}
+
+/**
+ * Restores reverted messages in an OpenCode session
+ */
+export async function unrevertOpenCodeSession(
+  host: OpenCodeHostConfig,
+  sessionId: string
+): Promise<any> {
+  const res = await openCodeFetch(host, `/session/${sessionId}/unrevert`, {
+    method: 'POST',
+    headers: buildOpenCodeHeaders(host),
+    body: JSON.stringify({}),
+    timeoutMs: 10000,
+  });
+  if (!res.ok) throw new Error(`Unrevert failed (${res.status})`);
+  return await res.json();
+}
+
+/**
+ * Runs a raw shell command in the context of an OpenCode session
+ */
+export async function executeOpenCodeSessionShell(
+  host: OpenCodeHostConfig,
+  sessionId: string,
+  command: string,
+  agent?: string
+): Promise<any> {
+  const res = await openCodeFetch(host, `/session/${sessionId}/shell`, {
+    method: 'POST',
+    headers: buildOpenCodeHeaders(host),
+    body: JSON.stringify({ command, agent: agent || 'build' }),
+    timeoutMs: 45000,
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`OpenCode shell command failed (${res.status}): ${text}`);
+  }
+  return await res.json();
+}
+
+/**
+ * Lists available agents (e.g. build, plan, explore, general)
+ */
+export async function listOpenCodeAgents(
+  host: OpenCodeHostConfig
+): Promise<Array<{ name: string; description?: string; mode?: string; hidden?: boolean; [key: string]: any }>> {
+  try {
+    const res = await openCodeFetch(host, '/agent', {
+      method: 'GET',
+      headers: buildOpenCodeHeaders(host),
+      timeoutMs: 6000,
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data) ? data : [];
+  } catch (err) {
+    return [];
+  }
+}
+
+/**
+ * Lists available slash commands
+ */
+export async function listOpenCodeCommands(
+  host: OpenCodeHostConfig
+): Promise<Array<{ name: string; description?: string; [key: string]: any }>> {
+  try {
+    const res = await openCodeFetch(host, '/command', {
+      method: 'GET',
+      headers: buildOpenCodeHeaders(host),
+      timeoutMs: 6000,
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data) ? data : [];
+  } catch (err) {
+    return [];
+  }
+}
+
+/**
+ * Retrieves VCS / Git repository info
+ */
+export async function getOpenCodeVcs(
+  host: OpenCodeHostConfig
+): Promise<{ branch?: string; default_branch?: string; [key: string]: any } | null> {
+  try {
+    const res = await openCodeFetch(host, '/vcs', {
+      method: 'GET',
+      headers: buildOpenCodeHeaders(host),
+      timeoutMs: 6000,
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (err) {
+    return null;
+  }
+}
+
+/**
+ * Retrieves server directory paths
+ */
+export async function getOpenCodePath(
+  host: OpenCodeHostConfig
+): Promise<{ home?: string; state?: string; config?: string; worktree?: string; directory?: string; [key: string]: any } | null> {
+  try {
+    const res = await openCodeFetch(host, '/path', {
+      method: 'GET',
+      headers: buildOpenCodeHeaders(host),
+      timeoutMs: 6000,
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (err) {
+    return null;
+  }
+}
+
+/**
+ * Lists files and directories
+ */
+export async function listOpenCodeFiles(
+  host: OpenCodeHostConfig,
+  path?: string
+): Promise<Array<{ name: string; path?: string; type: 'file' | 'directory'; size?: number; modified?: number }>> {
+  try {
+    const query = path ? `?path=${encodeURIComponent(path)}` : '';
+    const res = await openCodeFetch(host, `/file${query}`, {
+      method: 'GET',
+      headers: buildOpenCodeHeaders(host),
+      timeoutMs: 10000,
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data) ? data : [];
+  } catch (err) {
+    return [];
+  }
+}
+
+/**
+ * Reads file content from the OpenCode host
+ */
+export async function getOpenCodeFileContent(
+  host: OpenCodeHostConfig,
+  path: string
+): Promise<string | null> {
+  try {
+    const res = await openCodeFetch(host, `/file/content?path=${encodeURIComponent(path)}`, {
+      method: 'GET',
+      headers: buildOpenCodeHeaders(host),
+      timeoutMs: 15000,
+    });
+    if (!res.ok) return null;
+    return await res.text();
+  } catch (err) {
+    return null;
+  }
+}
+
+/**
+ * Finds files by name pattern
+ */
+export async function findOpenCodeFiles(
+  host: OpenCodeHostConfig,
+  query: string
+): Promise<string[]> {
+  try {
+    const res = await openCodeFetch(host, `/find/file?query=${encodeURIComponent(query)}`, {
+      method: 'GET',
+      headers: buildOpenCodeHeaders(host),
+      timeoutMs: 10000,
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data) ? data : [];
+  } catch (err) {
+    return [];
+  }
+}
+
+/**
+ * Searches code content using server ripgrep
+ */
+export async function searchOpenCodeContent(
+  host: OpenCodeHostConfig,
+  pattern: string
+): Promise<any[]> {
+  try {
+    const res = await openCodeFetch(host, `/find?pattern=${encodeURIComponent(pattern)}`, {
+      method: 'GET',
+      headers: buildOpenCodeHeaders(host),
+      timeoutMs: 15000,
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data) ? data : [];
+  } catch (err) {
+    return [];
+  }
+}
+
+/**
+ * Retrieves MCP server connections
+ */
+export async function getOpenCodeMcpStatus(host: OpenCodeHostConfig): Promise<any> {
+  try {
+    const res = await openCodeFetch(host, '/mcp', {
+      method: 'GET',
+      headers: buildOpenCodeHeaders(host),
+      timeoutMs: 6000,
+    });
+    if (!res.ok) return [];
+    return await res.json();
+  } catch (err) {
+    return [];
+  }
+}
+
+/**
+ * Retrieves LSP server status
+ */
+export async function getOpenCodeLspStatus(host: OpenCodeHostConfig): Promise<any> {
+  try {
+    const res = await openCodeFetch(host, '/lsp', {
+      method: 'GET',
+      headers: buildOpenCodeHeaders(host),
+      timeoutMs: 6000,
+    });
+    if (!res.ok) return [];
+    return await res.json();
+  } catch (err) {
+    return [];
+  }
+}
+
 export interface OpenCodeModelItem {
   id: string;
   name: string;
@@ -402,6 +914,9 @@ export interface OpenCodeModelItem {
   providerName: string;
   fullId: string;
   isDefault?: boolean;
+  reasoning?: boolean;
+  variants?: string[];
+  defaultVariant?: string;
 }
 
 export interface OpenCodeModelsResult {
@@ -444,6 +959,10 @@ export async function listOpenCodeModels(
           const modelId = m.id || key;
           const fullId = `${p.id}/${modelId}`;
           const isDef = defaultMap[p.id] === modelId || defaultMap.default === fullId || defaultMap.default === modelId;
+          const variants = m.variants && typeof m.variants === 'object'
+            ? (Array.isArray(m.variants) ? m.variants : Object.keys(m.variants))
+            : [];
+          const hasReasoning = Boolean(m.capabilities?.reasoning || variants.length > 0);
           modelsMap.set(fullId, {
             id: modelId,
             name: m.name || modelId,
@@ -451,6 +970,9 @@ export async function listOpenCodeModels(
             providerName: p.name || p.id,
             fullId,
             isDefault: isDef,
+            reasoning: hasReasoning,
+            variants,
+            defaultVariant: variants.includes('medium') ? 'medium' : variants[0] || undefined,
           });
           if (isDef && !defaultModel) {
             defaultModel = fullId;
@@ -487,6 +1009,10 @@ export async function listOpenCodeModels(
             const modelId = m.id || key;
             const fullId = `${p.id}/${modelId}`;
             const isDef = defaultMap[p.id] === modelId;
+            const variants = m.variants && typeof m.variants === 'object'
+              ? (Array.isArray(m.variants) ? m.variants : Object.keys(m.variants))
+              : [];
+            const hasReasoning = Boolean(m.capabilities?.reasoning || variants.length > 0);
             modelsMap.set(fullId, {
               id: modelId,
               name: m.name || modelId,
@@ -494,6 +1020,9 @@ export async function listOpenCodeModels(
               providerName: p.name || p.id,
               fullId,
               isDefault: isDef,
+              reasoning: hasReasoning,
+              variants,
+              defaultVariant: variants.includes('medium') ? 'medium' : variants[0] || undefined,
             });
             if (isDef && !defaultModel) {
               defaultModel = fullId;
@@ -534,7 +1063,7 @@ export async function sendOpenCodePrompt(
   host: OpenCodeHostConfig,
   sessionId: string,
   prompt: string,
-  options?: { model?: string; agent?: string; reasoningEffort?: string }
+  options?: { model?: string; agent?: string; reasoningEffort?: string; variant?: string }
 ): Promise<{ textResponse: string; raw: any }> {
   const path = `/session/${sessionId}/message`;
 
@@ -563,8 +1092,14 @@ export async function sendOpenCodePrompt(
     }
   }
   if (options?.agent) payload.agent = options.agent;
-  if (options?.reasoningEffort && options.reasoningEffort !== 'none') {
-    payload.reasoning = { effort: options.reasoningEffort };
+
+  // OpenCode native reasoning variants: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+  const rawVariant = options?.variant || options?.reasoningEffort;
+  if (rawVariant && typeof rawVariant === 'string') {
+    const v = rawVariant.trim().toLowerCase();
+    if (v && v !== 'none' && v !== 'auto' && v !== 'default') {
+      payload.variant = rawVariant.trim();
+    }
   }
 
   let res: Response;
@@ -634,21 +1169,43 @@ export async function fetchOpenCodeSessionMessages(
 
   let rawData: any = null;
 
-  // Try 1: GET /session/:id/messages
-  try {
-    const res = await openCodeFetch(host, `/session/${sessionId}/messages`, {
-      method: 'GET',
-      headers,
-      timeoutMs: 10000,
-    });
-    if (res.ok) {
-      rawData = await res.json();
+  // OpenCode API:
+  // Primary endpoint: GET /session/:id/message (OpenCode standard returns JSON array of messages)
+  // Fallbacks: GET /api/session/:id/message, GET /session/:id
+  const endpoints = [
+    `/session/${sessionId}/message`,
+    `/api/session/${sessionId}/message`,
+    `/session/${sessionId}/messages`,
+  ];
+
+  for (const endpoint of endpoints) {
+    try {
+      const res = await openCodeFetch(host, endpoint, {
+        method: 'GET',
+        headers,
+        timeoutMs: 10000,
+      });
+      if (res.ok) {
+        const ct = res.headers.get('content-type') || '';
+        // If server returns HTML (OpenCode SPA fallback on unknown route), ignore it
+        if (ct.includes('text/html')) {
+          continue;
+        }
+        const json = await res.json();
+        if (Array.isArray(json)) {
+          rawData = json;
+          break;
+        } else if (json && Array.isArray(json.messages)) {
+          rawData = json.messages;
+          break;
+        }
+      }
+    } catch {
+      // Ignore and try fallback
     }
-  } catch {
-    // Ignore and try fallback
   }
 
-  // Try 2: GET /session/:id
+  // Fallback: GET /session/:id
   if (!rawData || !Array.isArray(rawData)) {
     try {
       const res = await openCodeFetch(host, `/session/${sessionId}`, {
@@ -657,11 +1214,14 @@ export async function fetchOpenCodeSessionMessages(
         timeoutMs: 10000,
       });
       if (res.ok) {
-        const sessionObj = await res.json();
-        if (Array.isArray(sessionObj.messages)) {
-          rawData = sessionObj.messages;
-        } else if (sessionObj.parts || sessionObj.text) {
-          rawData = [sessionObj];
+        const ct = res.headers.get('content-type') || '';
+        if (!ct.includes('text/html')) {
+          const sessionObj = await res.json();
+          if (Array.isArray(sessionObj?.messages)) {
+            rawData = sessionObj.messages;
+          } else if (sessionObj?.parts || sessionObj?.text) {
+            rawData = [sessionObj];
+          }
         }
       }
     } catch {
@@ -673,9 +1233,12 @@ export async function fetchOpenCodeSessionMessages(
     return null;
   }
 
-  const assistantMessages = rawData.filter(
-    (m: any) => m && (m.role === 'assistant' || m.sender === 'assistant' || m.author === 'assistant')
-  );
+  // OpenCode messages store role in m.info.role (standard OpenCode) or m.role (flat/legacy)
+  const assistantMessages = rawData.filter((m: any) => {
+    if (!m) return false;
+    const role = (m.info?.role || m.role || m.sender || m.author || '').toLowerCase();
+    return role === 'assistant';
+  });
 
   if (assistantMessages.length === 0) {
     return { messagesCount: rawData.length, isGenerating: true };
@@ -697,11 +1260,215 @@ export async function fetchOpenCodeSessionMessages(
     assistantText = lastAssistant.message;
   }
 
+  const isGenerating = Boolean(
+    (lastAssistant.info && lastAssistant.info.finish !== 'stop' && !lastAssistant.info.time?.completed) ||
+    lastAssistant.status === 'in_progress' ||
+    lastAssistant.status === 'running'
+  );
+
   return {
     assistantText: assistantText.trim() || undefined,
-    isGenerating: Boolean(lastAssistant.status === 'in_progress' || lastAssistant.status === 'running'),
+    isGenerating,
     messagesCount: rawData.length,
     raw: rawData,
+  };
+}
+
+export interface OpenCodeChatPart {
+  id?: string;
+  type: 'text' | 'reasoning' | 'tool' | 'step-start' | 'step-finish' | string;
+  text?: string;
+  tool?: string;
+  callID?: string;
+  state?: {
+    status?: 'pending' | 'running' | 'completed' | 'error' | string;
+    input?: any;
+    output?: string;
+    title?: string;
+    error?: string;
+    metadata?: any;
+  };
+  time?: {
+    start?: number;
+    end?: number;
+  };
+}
+
+export interface OpenCodeChatMessage {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  text: string;
+  createdAt?: number;
+  completedAt?: number;
+  model?: string;
+  provider?: string;
+  variant?: string;
+  finish?: string;
+  isGenerating?: boolean;
+  parts?: OpenCodeChatPart[];
+  thinking?: string;
+  tokens?: {
+    total?: number;
+    input?: number;
+    output?: number;
+    reasoning?: number;
+  };
+}
+
+export interface OpenCodeSessionChatResult {
+  sessionId: string;
+  messages: OpenCodeChatMessage[];
+  diff: string | null;
+  isGenerating: boolean;
+  assistantText?: string;
+  model?: {
+    id?: string;
+    providerID?: string;
+    variant?: string;
+  };
+  directory?: string;
+  title?: string;
+  raw?: any;
+}
+
+/**
+ * Fetches structured chat dialogue history (all user and assistant messages) and git diff.
+ */
+export async function fetchOpenCodeSessionChat(
+  host: OpenCodeHostConfig,
+  sessionId: string
+): Promise<OpenCodeSessionChatResult | null> {
+  const [sessionData, sessionMeta, diff] = await Promise.all([
+    fetchOpenCodeSessionMessages(host, sessionId),
+    getOpenCodeSession(host, sessionId),
+    getOpenCodeDiff(host, sessionId),
+  ]);
+
+  if (!sessionData) {
+    return null;
+  }
+
+  const rawMessages: any[] = Array.isArray(sessionData.raw) ? sessionData.raw : [];
+  const messages: OpenCodeChatMessage[] = [];
+  let detectedModel = sessionMeta?.model || undefined;
+  let hasRunningTool = false;
+
+  for (const m of rawMessages) {
+    if (!m) continue;
+    const roleStr = (m.info?.role || m.role || m.sender || m.author || 'assistant').toLowerCase();
+    const role: 'user' | 'assistant' | 'system' =
+      roleStr === 'user' ? 'user' : roleStr === 'system' ? 'system' : 'assistant';
+
+    let text = '';
+    const parts: OpenCodeChatPart[] = [];
+    let thinking = '';
+
+    if (Array.isArray(m.parts)) {
+      for (const p of m.parts) {
+        if (!p) continue;
+        if (p.type === 'reasoning') {
+          const reasoningText = p.text || (typeof p.reasoning === 'string' ? p.reasoning : '');
+          if (reasoningText) thinking += (thinking ? '\n\n' : '') + reasoningText;
+          parts.push({
+            id: p.id,
+            type: 'reasoning',
+            text: reasoningText,
+            time: p.time,
+          });
+        } else if (p.type === 'tool' || p.tool) {
+          const status = p.state?.status || p.status || 'completed';
+          if (status === 'running' || status === 'pending') {
+            hasRunningTool = true;
+          }
+          parts.push({
+            id: p.id,
+            type: 'tool',
+            tool: p.tool || p.name,
+            callID: p.callID,
+            state: p.state || {
+              status,
+              input: p.input,
+              output: p.output,
+              title: p.title,
+            },
+            time: p.time,
+          });
+        } else if (p.type === 'text' || typeof p.text === 'string') {
+          const pText = p.text || '';
+          if (pText) text += (text ? '\n\n' : '') + pText;
+          parts.push({
+            id: p.id,
+            type: 'text',
+            text: pText,
+            time: p.time,
+          });
+        } else if (p.type === 'step-start' || p.type === 'step-finish') {
+          parts.push({
+            id: p.id,
+            type: p.type,
+            time: p.time,
+          });
+        }
+      }
+    } else if (typeof m.text === 'string') {
+      text = m.text;
+    } else if (typeof m.content === 'string') {
+      text = m.content;
+    } else if (typeof m.message === 'string') {
+      text = m.message;
+    }
+
+    const trimmedText = text.trim();
+    const isGen = Boolean(
+      (m.info && m.info.finish !== 'stop' && !m.info.time?.completed) ||
+      m.status === 'in_progress' ||
+      m.status === 'running' ||
+      hasRunningTool
+    );
+
+    const msgModel = m.info?.modelID || m.modelID || (typeof m.info?.model === 'string' ? m.info.model : m.info?.model?.id);
+    const msgProvider = m.info?.providerID || m.providerID || m.info?.model?.providerID;
+    const msgVariant = m.info?.variant || m.variant || m.info?.model?.variant;
+
+    if (msgModel && !detectedModel) {
+      detectedModel = {
+        id: msgModel,
+        providerID: msgProvider || 'opencode',
+        variant: msgVariant || 'default',
+      };
+    }
+
+    if (trimmedText.length > 0 || isGen || parts.length > 0) {
+      messages.push({
+        id: m.info?.id || m.id || `msg_${Math.random().toString(36).slice(2, 9)}`,
+        role,
+        text: trimmedText,
+        createdAt: m.info?.time?.created || m.time?.created || m.createdAt || undefined,
+        completedAt: m.info?.time?.completed || m.time?.completed || m.completedAt || undefined,
+        model: msgModel,
+        provider: msgProvider,
+        variant: msgVariant,
+        finish: m.info?.finish || m.finish,
+        isGenerating: isGen,
+        parts: parts.length > 0 ? parts : undefined,
+        thinking: thinking.trim() || undefined,
+        tokens: m.info?.tokens || m.tokens || undefined,
+      });
+    }
+  }
+
+  const isOverallGenerating = Boolean(sessionData.isGenerating || hasRunningTool);
+
+  return {
+    sessionId,
+    messages,
+    diff,
+    isGenerating: isOverallGenerating,
+    assistantText: sessionData.assistantText,
+    model: detectedModel,
+    directory: sessionMeta?.directory || undefined,
+    title: sessionMeta?.title || undefined,
+    raw: sessionData.raw,
   };
 }
 
@@ -883,10 +1650,10 @@ export async function executeOpenCodeRun(params: {
         console.log(`[OpenCode 524 Recovery] Cloudflare 524 detected for session ${sessionId}. Attempting recovery polling...`);
         let recovered = false;
 
-        for (let attempt = 1; attempt <= 3; attempt++) {
-          await new Promise((resolve) => setTimeout(resolve, 4000));
+        for (let attempt = 1; attempt <= 6; attempt++) {
+          await new Promise((resolve) => setTimeout(resolve, 5000));
           const sessionData = await fetchOpenCodeSessionMessages(host, sessionId);
-          if (sessionData && sessionData.assistantText) {
+          if (sessionData && sessionData.assistantText && !sessionData.isGenerating) {
             textResponse = sessionData.assistantText;
             recovered = true;
             console.log(`[OpenCode 524 Recovery] Successfully recovered assistant response on attempt ${attempt}!`);
@@ -895,8 +1662,9 @@ export async function executeOpenCodeRun(params: {
         }
 
         if (!recovered) {
-          // Keep run as 'running' so user can click "Синхронизировать сессию"
+          // Keep run as 'running' so user can click "Синхронизировать сессию" or auto-sync can pick it up
           const pendingTime = Date.now();
+          const parsedHost = parseOpenCodeHostInput(host.opencodeHost, host.ipAddress);
           await db
             .update(opencodeRuns)
             .set({
@@ -908,6 +1676,7 @@ export async function executeOpenCodeRun(params: {
                 durationMs: pendingTime - startTime,
                 hostName: host.name,
                 hostUrl,
+                hostDomain: parsedHost.hostname,
                 directory: directory || null,
                 projectTitle: project?.title || null,
                 model: model || null,

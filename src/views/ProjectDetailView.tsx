@@ -59,6 +59,7 @@ import ContainerCards from '@/components/ContainerCards';
 import CreateTaskModal from '@/components/CreateTaskModal';
 import CreateRelationModal from '@/components/CreateRelationModal';
 import EditProjectModal from '@/components/EditProjectModal';
+import OpenCodeChat from '@/components/OpenCodeChat';
 
 export interface ProjectDetailViewProps {
   bannerSlot?: React.ReactNode;
@@ -376,25 +377,55 @@ export default function ProjectDetailView({ bannerSlot, headerActionSlot, params
     if (!openCodePrompt.trim()) return;
     setIsRunningOpenCode(true);
     setOpenCodeError('');
+
+    const promptText = openCodePrompt.trim();
+    const titleText = openCodeTitle?.trim() || (promptText.slice(0, 60) + (promptText.length > 60 ? '...' : ''));
+    const directoryText = openCodeDirectory.trim() || undefined;
+    const sessionText = openCodeSessionId.trim() || undefined;
+    const modelText = openCodeModel.trim() || undefined;
+    const effortText = openCodeReasoningEffort !== 'none' ? openCodeReasoningEffort : undefined;
+
+    // Очищаем форму сразу, чтобы дать мгновенный отклик
+    setOpenCodePrompt('');
+    setOpenCodeTitle('');
+    setSelectedTaskIdForOpenCode('');
+
+    // Оптимистично добавляем таску в список запусков, чтобы пользователь сразу видел прогресс
+    const optRunId = `opt_${Date.now()}`;
+    const optimisticRun: any = {
+      id: optRunId,
+      hostId: project.hostId,
+      projectId: project.id,
+      title: titleText,
+      prompt: promptText,
+      status: 'running',
+      response: null,
+      diff: null,
+      errorMessage: null,
+      createdAt: Date.now(),
+      completedAt: null,
+      hostName: allHosts.find((h: any) => h.id === project?.hostId)?.name || 'Сервер',
+      projectTitle: project?.title || 'Проект',
+    };
+    setOpenCodeRuns((prev) => [optimisticRun, ...prev]);
+    setExpandedRunId(optRunId);
+
     try {
       const res = await fetch('/api/opencode/runs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           projectId: project.id,
-          prompt: openCodePrompt.trim(),
-          title: openCodeTitle?.trim() || undefined,
-          directory: openCodeDirectory.trim() || undefined,
-          sessionId: openCodeSessionId.trim() || undefined,
-          model: openCodeModel.trim() || undefined,
-          reasoningEffort: openCodeReasoningEffort !== 'none' ? openCodeReasoningEffort : undefined,
+          prompt: promptText,
+          title: titleText,
+          directory: directoryText,
+          sessionId: sessionText,
+          model: modelText,
+          reasoningEffort: effortText,
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Ошибка выполнения OpenCode');
-      setOpenCodePrompt('');
-      setOpenCodeTitle('');
-      setSelectedTaskIdForOpenCode('');
       await fetchOpenCodeRuns();
       if (project.hostId) {
         fetchOpenCodeSessions(project.hostId);
@@ -402,6 +433,7 @@ export default function ProjectDetailView({ bannerSlot, headerActionSlot, params
       if (data.run?.id) setExpandedRunId(data.run.id);
     } catch (err: any) {
       setOpenCodeError(err.message);
+      await fetchOpenCodeRuns();
     } finally {
       setIsRunningOpenCode(false);
     }
@@ -430,7 +462,7 @@ export default function ProjectDetailView({ bannerSlot, headerActionSlot, params
     }
   };
 
-  const handleSyncRun = async (runId: string) => {
+  const handleSyncRun = async (runId: string, silent: boolean = false) => {
     setSyncingRunId(runId);
     try {
       const res = await fetch(`/api/opencode/runs/${runId}`, {
@@ -441,11 +473,13 @@ export default function ProjectDetailView({ bannerSlot, headerActionSlot, params
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Ошибка синхронизации');
       await fetchOpenCodeRuns();
-      if (data.message) {
+      if (!silent && data.message) {
         alert(data.message);
       }
     } catch (err: any) {
-      alert(err.message || 'Ошибка синхронизации');
+      if (!silent) {
+        alert(err.message || 'Ошибка синхронизации');
+      }
     } finally {
       setSyncingRunId(null);
     }
@@ -492,6 +526,37 @@ export default function ProjectDetailView({ bannerSlot, headerActionSlot, params
       fetchOpenCodeModels(project.hostId);
     }
   }, [project?.hostId]);
+
+  // Автоматический опрос (polling) и фоновая синхронизация OpenCode-запусков
+  useEffect(() => {
+    if (activeTab !== 'opencode') return;
+
+    const hasRunning = openCodeRuns.some((r) => r.status === 'running' || r.status === 'pending');
+
+    // Если есть запущенные таски — опрашиваем каждые 3 секунды, иначе раз в 15 секунд
+    const pollIntervalMs = hasRunning || isRunningOpenCode ? 3000 : 15000;
+    const pollTimer = setInterval(() => {
+      fetchOpenCodeRuns();
+    }, pollIntervalMs);
+
+    // Фоновая синхронизация для тасок, ожидающих ответа в фоне (в т.ч. после 524 таймаута)
+    let syncTimer: any = null;
+    const runningWithSession = openCodeRuns.filter(
+      (r) => r.status === 'running' && r.sessionId && !r.id.startsWith('opt_')
+    );
+    if (runningWithSession.length > 0 && !syncingRunId) {
+      syncTimer = setInterval(() => {
+        for (const run of runningWithSession) {
+          handleSyncRun(run.id, true);
+        }
+      }, 5000);
+    }
+
+    return () => {
+      clearInterval(pollTimer);
+      if (syncTimer) clearInterval(syncTimer);
+    };
+  }, [activeTab, openCodeRuns, isRunningOpenCode, syncingRunId, projectId]);
 
   const handleGrantAccess = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1964,721 +2029,11 @@ export default function ProjectDetailView({ bannerSlot, headerActionSlot, params
       {/* TAB 7: OPENCODE AI */}
       {activeTab === 'opencode' && (
         <div className="space-y-6">
-          {/* Server Connection Banner */}
-          {!project.hostId ? (
-            <div className="p-4 rounded-xl border border-amber-500/20 bg-amber-500/10 flex items-start gap-3.5">
-              <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
-              <div className="flex-1">
-                <h4 className="text-sm font-semibold text-amber-300">Сервер не привязан к проекту</h4>
-                <p className="text-xs text-slate-300 mt-1">
-                  Для выполнения задач через OpenCode Server необходимо привязать проект к серверу инфраструктуры, где запущен OpenCode.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('overview')}
-                  className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 rounded-lg text-xs font-medium transition-colors"
-                >
-                  <Server className="w-3.5 h-3.5" /> Назначить сервер в настройках
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="p-4 rounded-xl border border-slate-800 bg-slate-900/60 flex flex-col md:flex-row md:items-center justify-between gap-4">
-              <div className="flex items-start md:items-center gap-3.5">
-                <div className="w-10 h-10 rounded-xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center shrink-0">
-                  <Zap className="w-5 h-5 text-cyan-400" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-sm font-bold text-white flex items-center gap-1.5">
-                      <Server className="w-4 h-4 text-slate-400" />
-                      {project.host?.name || 'Сервер проекта'}
-                    </span>
-                    <span className="text-xs font-mono text-slate-400 bg-slate-800 px-2 py-0.5 rounded">
-                      {project.host?.ip || 'IP не указан'}
-                    </span>
-                    {project.host?.opencodeEnabled ? (
-                      checkingOpenCodeHealth ? (
-                        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
-                          <RefreshCw className="w-3 h-3 animate-spin" /> Проверка связи...
-                        </span>
-                      ) : openCodeHealth?.healthy ? (
-                        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                          OpenCode онлайн {openCodeHealth.version ? `(v${openCodeHealth.version})` : ''}
-                        </span>
-                      ) : openCodeHealth?.error ? (
-                        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-rose-500/10 text-rose-400 border border-rose-500/20" title={openCodeHealth.error}>
-                          <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
-                          Нет связи ({openCodeHealth.error})
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
-                          <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
-                          Порт: {project.host?.opencodePort ?? 'авто'}
-                        </span>
-                      )
-                    ) : (
-                      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                        <AlertTriangle className="w-3 h-3 text-amber-400" /> OpenCode отключен на сервере
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-xs text-slate-400 mt-1 flex items-center gap-3">
-                    <span>
-                      API Эндпоинт:{' '}
-                      <span className="font-mono text-slate-300">
-                        {project.host?.opencodeUseHttps ? 'https' : 'http'}://
-                        {project.host?.opencodeHost || project.host?.ip}
-                        {project.host?.opencodePort ? `:${project.host.opencodePort}` : ' (авто: 443/80)'}
-                      </span>
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={checkHostOpenCode}
-                  disabled={checkingOpenCodeHealth}
-                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5 disabled:opacity-50"
-                  title="Проверить статус OpenCode Server"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 text-cyan-400 ${checkingOpenCodeHealth ? 'animate-spin' : ''}`} />
-                  Проверить связь
-                </button>
-                <Link
-                  href="/infrastructure"
-                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5"
-                >
-                  <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
-                  Инфраструктура
-                </Link>
-              </div>
-            </div>
-          )}
-
-          {/* New OpenCode Task Card */}
-          <div className="border border-slate-800 bg-slate-900/60 rounded-xl p-5">
-            <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-800/80">
-              <div className="flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-cyan-400" />
-                <h3 className="text-sm font-semibold text-white">Новый запуск в OpenCode AI</h3>
-              </div>
-              <span className="text-xs text-slate-500">Автономное выполнение задач прямо на сервере проекта</span>
-            </div>
-
-            {/* Quick Kanban selector */}
-            {project.tasks && project.tasks.length > 0 && (
-              <div className="mb-4">
-                <label className="block text-xs font-medium text-slate-400 mb-1.5">
-                  Быстрый выбор из Канбан-задач проекта:
-                </label>
-                <select
-                  value={selectedTaskIdForOpenCode}
-                  onChange={(e) => {
-                    const taskId = e.target.value;
-                    setSelectedTaskIdForOpenCode(taskId);
-                    const task = project.tasks.find((t: any) => t.id === taskId);
-                    if (task) {
-                      setOpenCodeTitle(`Задача: ${task.title}`);
-                      setOpenCodePrompt(
-                        `Пожалуйста, реши задачу по проекту "${project.title}":\n\n` +
-                        `Название: ${task.title}\n` +
-                        `Описание: ${task.description || 'Не указано'}\n` +
-                        `Приоритет: ${task.priority}\n` +
-                        `Колонка: ${task.column}`
-                      );
-                    }
-                  }}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500 transition-colors"
-                >
-                  <option value="">-- Выберите задачу для решения через OpenCode --</option>
-                  {project.tasks.map((t: any) => (
-                    <option key={t.id} value={t.id}>
-                      [{t.column}] {t.title} ({t.priority})
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            {/* Quick Prompt Presets */}
-            <div className="mb-4">
-              <label className="block text-xs font-medium text-slate-400 mb-1.5">
-                Готовые шаблоны задач:
-              </label>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setOpenCodeTitle('Создание AGENTS.md');
-                    setOpenCodePrompt(
-                      'Создай подробный файл AGENTS.md в корне проекта с описанием структуры проекта, стека технологий, ключевых команд сборки, запуска и тестирования, а также правилами написания кода для автономных AI-агентов.'
-                    );
-                  }}
-                  className="px-2.5 py-1.5 bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700/60 rounded-lg text-xs text-slate-300 hover:text-white transition-colors flex items-center gap-1.5"
-                >
-                  <FileCode className="w-3.5 h-3.5 text-cyan-400" />
-                  AGENTS.md
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setOpenCodeTitle('Аудит безопасности');
-                    setOpenCodePrompt(
-                      'Проведи полный аудит безопасности проекта: проанализируй зависимости, конфигурационные файлы, потенциальные утечки секретов и уязвимости в кодовой базе. Предложи конкретные рекомендации и исправления.'
-                    );
-                  }}
-                  className="px-2.5 py-1.5 bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700/60 rounded-lg text-xs text-slate-300 hover:text-white transition-colors flex items-center gap-1.5"
-                >
-                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-                  Аудит безопасности
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setOpenCodeTitle('Оптимизация Docker');
-                    setOpenCodePrompt(
-                      'Создай или оптимизируй production-ready Dockerfile с multi-stage сборкой и docker-compose.yml для запуска проекта со всеми необходимыми сервисами и переменными окружения.'
-                    );
-                  }}
-                  className="px-2.5 py-1.5 bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700/60 rounded-lg text-xs text-slate-300 hover:text-white transition-colors flex items-center gap-1.5"
-                >
-                  <Layers className="w-3.5 h-3.5 text-blue-400" />
-                  Dockerfile & Compose
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setOpenCodeTitle('Генерация тестов');
-                    setOpenCodePrompt(
-                      'Напиши набор юнит-тестов для основных модулей и API-эндпоинтов проекта с использованием моков и проверкой граничных случаев.'
-                    );
-                  }}
-                  className="px-2.5 py-1.5 bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700/60 rounded-lg text-xs text-slate-300 hover:text-white transition-colors flex items-center gap-1.5"
-                >
-                  <Code className="w-3.5 h-3.5 text-purple-400" />
-                  Unit Тесты
-                </button>
-              </div>
-            </div>
-
-            {/* Run Form */}
-            <form onSubmit={handleRunOpenCode} className="space-y-4">
-              {/* Parameters Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 p-3.5 rounded-xl bg-slate-950/80 border border-slate-800">
-                {/* Directory Selector */}
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs font-medium text-slate-300 flex items-center gap-1.5">
-                      <Folder className="w-3.5 h-3.5 text-cyan-400" />
-                      Рабочая директория (CWD)
-                    </label>
-                    {project.deployment?.deployPath && (
-                      <button
-                        type="button"
-                        onClick={() => setOpenCodeDirectory(project.deployment.deployPath)}
-                        className="text-[10px] text-cyan-400 hover:text-cyan-300 underline transition-colors"
-                      >
-                        сбросить на деплой-путь
-                      </button>
-                    )}
-                  </div>
-                  <input
-                    type="text"
-                    value={openCodeDirectory}
-                    onChange={(e) => setOpenCodeDirectory(e.target.value)}
-                    placeholder={project.deployment?.deployPath || '/home/docker/project'}
-                    className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-cyan-500 transition-colors"
-                  />
-                  <p className="text-[10px] text-slate-500 mt-1">
-                    Директория репозитория на сервере, где OpenCode будет читать и менять файлы
-                  </p>
-                </div>
-
-                {/* Session Selector */}
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs font-medium text-slate-300 flex items-center gap-1.5">
-                      <Terminal className="w-3.5 h-3.5 text-emerald-400" />
-                      Сессия OpenCode
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => project.hostId && fetchOpenCodeSessions(project.hostId)}
-                      disabled={isLoadingSessions}
-                      className="text-[10px] text-slate-400 hover:text-slate-200 flex items-center gap-1 transition-colors disabled:opacity-50"
-                      title="Обновить список сессий с сервера"
-                    >
-                      <RefreshCw className={`w-2.5 h-2.5 ${isLoadingSessions ? 'animate-spin' : ''}`} />
-                      Обновить сессии
-                    </button>
-                  </div>
-                  <select
-                    value={openCodeSessionId}
-                    onChange={(e) => setOpenCodeSessionId(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500 transition-colors"
-                  >
-                    <option value="">➕ Новая изолированная сессия (автоматически)</option>
-                    {availableSessions.map((s: any) => (
-                      <option key={s.id} value={s.id}>
-                        [Сессия] {s.title || s.id.slice(0, 16)} {s.directory ? `(${s.directory})` : ''}
-                      </option>
-                    ))}
-                  </select>
-                  <p className="text-[10px] text-slate-500 mt-1">
-                    {openCodeSessionId
-                      ? 'Контекст диалога продолжится в выбранной сессии'
-                      : 'Будет создана новая чистая сессия в указанной директории'}
-                  </p>
-                </div>
-
-                {/* Model Selector */}
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs font-medium text-slate-300 flex items-center gap-1.5">
-                      <Bot className="w-3.5 h-3.5 text-purple-400" />
-                      Модель AI (LLM)
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => project.hostId && fetchOpenCodeModels(project.hostId)}
-                      disabled={isLoadingModels}
-                      className="text-[10px] text-slate-400 hover:text-slate-200 flex items-center gap-1 transition-colors disabled:opacity-50"
-                      title="Обновить список моделей с сервера OpenCode"
-                    >
-                      <RefreshCw className={`w-2.5 h-2.5 ${isLoadingModels ? 'animate-spin' : ''}`} />
-                      Обновить модели
-                    </button>
-                  </div>
-                  <select
-                    value={openCodeModel}
-                    onChange={(e) => setOpenCodeModel(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500 transition-colors"
-                  >
-                    {availableModels.length > 0 ? (
-                      <>
-                        <option value="">⚙️ По умолчанию на сервере OpenCode (авто)</option>
-                        {Array.from(new Set(availableModels.map((m) => m.providerName))).map((providerName) => (
-                          <optgroup key={providerName} label={providerName}>
-                            {availableModels
-                              .filter((m) => m.providerName === providerName)
-                              .map((m) => (
-                                <option key={m.fullId} value={m.fullId}>
-                                  {m.name} {m.isDefault ? '★ (по умолчанию)' : ''}
-                                </option>
-                              ))}
-                          </optgroup>
-                        ))}
-                      </>
-                    ) : (
-                      <>
-                        <option value="">⚙️ По умолчанию на сервере OpenCode (авто)</option>
-                        <option value="opencode/big-pickle">Big Pickle (OpenCode Zen ★)</option>
-                        <option value="opencode/mimo-v2.6-flash-free">MiMo-V2.6-Flash Free (OpenCode)</option>
-                        <option value="opencode/nemotron-3-ultra-free">Nemotron 3 Ultra Free (OpenCode)</option>
-                        <option value="opencode/muse-spark-1.3-contributor-free">Muse Spark 1.3 Free (OpenCode)</option>
-                      </>
-                    )}
-                  </select>
-                  <p className="text-[10px] text-slate-500 mt-1">
-                    {isLoadingModels
-                      ? 'Опрос доступных моделей с сервера OpenCode...'
-                      : availableModels.length > 0
-                      ? `Подгружено ${availableModels.length} моделей с сервера ${project.host?.opencodeHost || project.host?.name || 'хоста'}`
-                      : 'Загружаются актуальные модели, настроенные на сервере хоста'}
-                  </p>
-                </div>
-
-                {/* Reasoning Effort Selector */}
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1 flex items-center gap-1.5">
-                    <Sliders className="w-3.5 h-3.5 text-amber-400" />
-                    Уровень размышлений (Reasoning Effort)
-                  </label>
-                  <select
-                    value={openCodeReasoningEffort}
-                    onChange={(e) => setOpenCodeReasoningEffort(e.target.value as any)}
-                    className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500 transition-colors"
-                  >
-                    <option value="medium">Medium — Сбалансированный (по умолчанию)</option>
-                    <option value="high">High — Глубокий анализ архитектуры</option>
-                    <option value="low">Low — Быстрый ответ с минимумом рассуждений</option>
-                    <option value="none">None — Без отдельного reasoning блока</option>
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">
-                  Название / Цель запуска (опционально)
-                </label>
-                <input
-                  type="text"
-                  value={openCodeTitle}
-                  onChange={(e) => setOpenCodeTitle(e.target.value)}
-                  placeholder="например: Добавить healthcheck endpoint или Оптимизация сборки"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500 transition-colors"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">
-                  Промпт / Задание для OpenCode <span className="text-rose-400">*</span>
-                </label>
-                <textarea
-                  rows={4}
-                  required
-                  value={openCodePrompt}
-                  onChange={(e) => setOpenCodePrompt(e.target.value)}
-                  placeholder="Опишите детально, что OpenCode должен сделать в кодовой базе проекта..."
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-xs text-white font-mono placeholder:font-sans focus:outline-none focus:border-cyan-500 transition-colors leading-relaxed"
-                />
-              </div>
-
-              {openCodeError && (
-                <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-lg text-rose-400 text-xs flex items-center gap-2">
-                  <AlertTriangle className="w-4 h-4 shrink-0" />
-                  <span>{openCodeError}</span>
-                </div>
-              )}
-
-              <div className="flex items-center justify-between pt-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setOpenCodePrompt('');
-                    setOpenCodeTitle('');
-                    setSelectedTaskIdForOpenCode('');
-                    setOpenCodeError('');
-                  }}
-                  className="text-xs text-slate-500 hover:text-slate-300 transition-colors"
-                >
-                  Очистить
-                </button>
-                <button
-                  type="submit"
-                  disabled={isRunningOpenCode || !openCodePrompt.trim() || !project.hostId}
-                  className="inline-flex items-center gap-2 px-4 py-2 bg-cyan-500 hover:bg-cyan-400 text-slate-950 rounded-lg text-xs font-semibold transition-colors disabled:opacity-50 shadow-lg shadow-cyan-500/20"
-                >
-                  {isRunningOpenCode ? (
-                    <>
-                      <RefreshCw className="w-4 h-4 animate-spin" />
-                      Выполняется в OpenCode...
-                    </>
-                  ) : (
-                    <>
-                      <Zap className="w-4 h-4" />
-                      Запустить OpenCode
-                    </>
-                  )}
-                </button>
-              </div>
-            </form>
-          </div>
-
-          {/* Runs History */}
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-white flex items-center gap-2">
-                <Clock className="w-4 h-4 text-slate-400" />
-                История запусков OpenCode ({openCodeRuns.length})
-              </h3>
-              <button
-                type="button"
-                onClick={fetchOpenCodeRuns}
-                className="text-xs text-slate-400 hover:text-cyan-400 transition-colors flex items-center gap-1"
-              >
-                <RefreshCw className="w-3 h-3" /> Обновить
-              </button>
-            </div>
-
-            {openCodeRuns.length === 0 ? (
-              <div className="text-center py-10 border border-dashed border-slate-800 rounded-xl bg-slate-900/30">
-                <Sparkles className="w-8 h-8 text-slate-600 mx-auto mb-2" />
-                <p className="text-xs text-slate-400 font-medium">Нет истории запусков</p>
-                <p className="text-[11px] text-slate-600 mt-1 max-w-sm mx-auto">
-                  Запустите первую задачу для OpenCode выше. История запусков, ответы агента и git diff изменений сохранятся здесь.
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {openCodeRuns.map((run) => {
-                  const isExpanded = expandedRunId === run.id;
-                  const isDiffOpen = viewingDiffRunId === run.id;
-                  const hasDiff = Boolean(run.diff && run.diff.trim().length > 0);
-
-                  return (
-                    <div
-                      key={run.id}
-                      className="border border-slate-800 bg-slate-900/60 rounded-xl overflow-hidden transition-colors hover:border-slate-700/80"
-                    >
-                      {/* Run Header */}
-                      <div className="p-4 flex items-center justify-between gap-3 flex-wrap">
-                        <div className="flex items-center gap-3 min-w-0">
-                          <button
-                            type="button"
-                            onClick={() => setExpandedRunId(isExpanded ? null : run.id)}
-                            className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-                          >
-                            {isExpanded ? (
-                              <ChevronDown className="w-4 h-4" />
-                            ) : (
-                              <ChevronRight className="w-4 h-4" />
-                            )}
-                          </button>
-                          <div>
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <h4
-                                onClick={() => setExpandedRunId(isExpanded ? null : run.id)}
-                                className="text-xs font-semibold text-white cursor-pointer hover:text-cyan-300 transition-colors"
-                              >
-                                {run.title || `Запуск #${run.id.slice(-6)}`}
-                              </h4>
-                              <span
-                                className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${
-                                  run.status === 'completed'
-                                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                                    : run.status === 'failed'
-                                    ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
-                                    : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-                                }`}
-                              >
-                                {run.status === 'completed'
-                                  ? 'Выполнено'
-                                  : run.status === 'failed'
-                                  ? 'Ошибка'
-                                  : 'Выполняется'}
-                              </span>
-                              {hasDiff && (
-                                <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-cyan-500/10 text-cyan-300 border border-cyan-500/20">
-                                  Есть Git Diff
-                                </span>
-                              )}
-                            </div>
-                            <div className="flex items-center gap-3 text-[11px] text-slate-500 mt-0.5">
-                              <span>{formatDateTime(run.createdAt)}</span>
-                              {run.sessionId && (
-                                <span className="font-mono text-slate-600">
-                                  session: {run.sessionId.slice(0, 12)}...
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                          {run.sessionId && (
-                            <button
-                              type="button"
-                              onClick={() => handleSyncRun(run.id)}
-                              disabled={syncingRunId === run.id}
-                              className="px-2.5 py-1 text-xs text-cyan-300 hover:text-white bg-cyan-950/60 hover:bg-cyan-900/70 border border-cyan-800/50 rounded-md transition-colors flex items-center gap-1.5 disabled:opacity-50"
-                              title="Синхронизировать сессию с сервером OpenCode"
-                            >
-                              <RefreshCw className={`w-3 h-3 ${syncingRunId === run.id ? 'animate-spin' : ''}`} />
-                              <span>{syncingRunId === run.id ? 'Синхронизация...' : 'Синхронизировать'}</span>
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => setExpandedRunId(isExpanded ? null : run.id)}
-                            className="px-2.5 py-1 text-xs text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-md transition-colors"
-                          >
-                            {isExpanded ? 'Свернуть' : 'Подробнее'}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteRun(run.id)}
-                            className="p-1 text-slate-500 hover:text-rose-400 rounded-md hover:bg-rose-500/10 transition-colors"
-                            title="Удалить из истории"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Expanded Run Details */}
-                      {isExpanded && (
-                        <div className="border-t border-slate-800/80 p-4 space-y-4 bg-slate-950/40">
-                          {(() => {
-                            let meta: any = null;
-                            try { meta = run.metadata ? JSON.parse(run.metadata) : null; } catch { meta = null; }
-                            return (
-                              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2 text-[11px] font-mono">
-                                <div className="px-2.5 py-2 rounded-lg bg-slate-900 border border-slate-800">
-                                  <div className="text-slate-500 uppercase text-[10px]">Сессия OpenCode</div>
-                                  <div className="text-cyan-300 break-all mt-0.5">{run.sessionId || '— (не создана)'}</div>
-                                </div>
-                                <div className="px-2.5 py-2 rounded-lg bg-slate-900 border border-slate-800">
-                                  <div className="text-slate-500 uppercase text-[10px]">Модель / Думание</div>
-                                  <div className="text-slate-200 mt-0.5 break-all">
-                                    {meta?.model ? meta.model.split('/').pop() : 'default'}
-                                    {meta?.reasoningEffort ? ` (${meta.reasoningEffort})` : ''}
-                                  </div>
-                                </div>
-                                <div className="px-2.5 py-2 rounded-lg bg-slate-900 border border-slate-800">
-                                  <div className="text-slate-500 uppercase text-[10px]">Хост</div>
-                                  <div className="text-slate-200 mt-0.5 break-all">{meta?.hostUrl || run.hostName || run.hostIp || '—'}</div>
-                                </div>
-                                <div className="px-2.5 py-2 rounded-lg bg-slate-900 border border-slate-800">
-                                  <div className="text-slate-500 uppercase text-[10px]">Рабочий путь</div>
-                                  <div className="text-slate-200 mt-0.5 break-all">{meta?.directory || '— (cwd сервера)'}</div>
-                                </div>
-                              </div>
-                            );
-                          })()}
-                          {/* Prompt */}
-                          <div>
-                            <span className="block text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-1.5">
-                              Промпт / Задание:
-                            </span>
-                            <div className="bg-slate-900 border border-slate-800 rounded-lg p-3 text-xs text-slate-200 font-mono whitespace-pre-wrap leading-relaxed max-h-48 overflow-y-auto">
-                              {run.prompt}
-                            </div>
-                          </div>
-
-                          {/* Response */}
-                          <div>
-                            <span className="block text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-1.5">
-                              Ответ OpenCode:
-                            </span>
-                            {run.response ? (
-                              <div className="bg-slate-900/90 border border-slate-800 rounded-lg p-3 text-xs text-slate-200 whitespace-pre-wrap leading-relaxed max-h-72 overflow-y-auto">
-                                {run.response}
-                              </div>
-                            ) : (() => {
-                              const isCf524 =
-                                run.errorMessage?.includes('524') ||
-                                run.errorMessage?.includes('Cloudflare') ||
-                                run.errorMessage?.includes('origin_response_timeout');
-
-                              if (isCf524) {
-                                return (
-                                  <div className="space-y-3">
-                                    <div className="bg-amber-950/30 border border-amber-800/50 rounded-xl p-4 text-xs text-amber-200">
-                                      <div className="flex items-start gap-2.5">
-                                        <span className="text-xl">☁️</span>
-                                        <div className="space-y-2">
-                                          <div className="font-semibold text-amber-300">
-                                            Cloudflare Proxy Timeout (524): Генерация превысила 120 секунд
-                                          </div>
-                                          <p className="text-[12px] text-amber-200/90 leading-relaxed">
-                                            Домен OpenCode подключен через Cloudflare с включенным проксированием (оранжевое облако). В бесплатном тарифе Cloudflare принудительно обрывает HTTP-соединение через 120 секунд, однако задача на сервере обычно продолжает выполняться в фоне!
-                                          </p>
-                                          <div className="p-2.5 rounded-lg bg-slate-950/70 border border-amber-900/40 text-[11px] font-mono text-slate-300 space-y-1">
-                                            <div className="text-amber-400 font-sans font-semibold">Решение:</div>
-                                            <div>1. Если генерация уже завершилась на сервере, нажмите кнопку ниже — Visor заберёт ответ прямо сейчас.</div>
-                                            <div>2. Чтобы навсегда убрать лимит 120с: в панели Cloudflare DNS переключите статус записи в режим <strong>«DNS Only» (серое облако)</strong>.</div>
-                                          </div>
-                                          {run.sessionId && (
-                                            <button
-                                              type="button"
-                                              onClick={() => handleSyncRun(run.id)}
-                                              disabled={syncingRunId === run.id}
-                                              className="px-3.5 py-1.5 rounded-lg bg-gradient-to-r from-amber-600 to-cyan-600 hover:from-amber-500 hover:to-cyan-500 text-white font-medium text-xs shadow-md transition-all flex items-center gap-2 disabled:opacity-50 cursor-pointer"
-                                            >
-                                              <RefreshCw className={`w-3.5 h-3.5 ${syncingRunId === run.id ? 'animate-spin' : ''}`} />
-                                              {syncingRunId === run.id ? 'Проверяем сервер...' : 'Синхронизировать сессию с OpenCode'}
-                                            </button>
-                                          )}
-                                        </div>
-                                      </div>
-                                    </div>
-                                    <div className="bg-rose-950/20 border border-rose-900/30 rounded-lg p-2.5 text-[11px] text-rose-300/80 font-mono whitespace-pre-wrap max-h-32 overflow-y-auto">
-                                      {run.errorMessage}
-                                    </div>
-                                  </div>
-                                );
-                              }
-
-                              if (run.errorMessage) {
-                                return (
-                                  <div className="bg-rose-950/30 border border-rose-900/50 rounded-lg p-3 text-xs text-rose-300 whitespace-pre-wrap">
-                                    {run.errorMessage}
-                                  </div>
-                                );
-                              }
-
-                              return <div className="text-xs text-slate-500 italic">Ответ отсутствует</div>;
-                            })()}
-                          </div>
-
-                          {/* Diff Section */}
-                          {hasDiff ? (
-                            <div className="space-y-2">
-                              <div className="flex items-center justify-between">
-                                <span className="text-[11px] font-semibold uppercase tracking-wider text-cyan-400 flex items-center gap-1.5">
-                                  <FileCode className="w-3.5 h-3.5" />
-                                  Изменения файлов (Git Diff):
-                                </span>
-                                <div className="flex items-center gap-2">
-                                  <button
-                                    type="button"
-                                    onClick={() => copyToClipboard(run.diff, `diff-${run.id}`)}
-                                    className="px-2 py-1 text-[11px] text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 rounded transition-colors flex items-center gap-1"
-                                  >
-                                    {copiedDiffId === `diff-${run.id}` ? (
-                                      <>
-                                        <Check className="w-3 h-3 text-emerald-400" /> Скопировано
-                                      </>
-                                    ) : (
-                                      <>
-                                        <Copy className="w-3 h-3" /> Скопировать Diff
-                                      </>
-                                    )}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      setViewingDiffRunId(isDiffOpen ? null : run.id)
-                                    }
-                                    className="px-2 py-1 text-[11px] text-cyan-300 hover:text-cyan-200 bg-cyan-950/40 border border-cyan-800/40 rounded transition-colors"
-                                  >
-                                    {isDiffOpen ? 'Скрыть Diff' : 'Показать Diff'}
-                                  </button>
-                                </div>
-                              </div>
-
-                              {isDiffOpen && (
-                                <div className="bg-slate-950 border border-slate-800 rounded-lg p-2 font-mono text-[11px] overflow-x-auto max-h-80 overflow-y-auto leading-relaxed">
-                                  {run.diff.split('\n').map((line: string, idx: number) => {
-                                    let lineClass = 'text-slate-400';
-                                    if (line.startsWith('diff --git')) {
-                                      lineClass = 'text-purple-400 font-bold bg-purple-950/20 block py-0.5 px-1 rounded';
-                                    } else if (line.startsWith('@@')) {
-                                      lineClass = 'text-cyan-400 bg-cyan-950/20 block py-0.5 px-1 rounded';
-                                    } else if (line.startsWith('+') && !line.startsWith('+++')) {
-                                      lineClass = 'text-emerald-400 bg-emerald-950/30 block py-0.5 px-1';
-                                    } else if (line.startsWith('-') && !line.startsWith('---')) {
-                                      lineClass = 'text-rose-400 bg-rose-950/30 block py-0.5 px-1';
-                                    } else if (line.startsWith('index') || line.startsWith('---') || line.startsWith('+++')) {
-                                      lineClass = 'text-slate-500 font-medium block px-1';
-                                    }
-                                    return (
-                                      <div key={idx} className={lineClass}>
-                                        {line || ' '}
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              )}
-                            </div>
-                          ) : (
-                            <div className="text-[11px] text-slate-500 italic">
-                              Файловые изменения в репозитории не зафиксированы.
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
+          <OpenCodeChat
+            projectId={project.id}
+            project={project}
+            onOpenKanban={() => setActiveTab('kanban')}
+          />
         </div>
       )}
 

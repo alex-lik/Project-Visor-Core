@@ -197,6 +197,17 @@ export default function GlobalKanbanPage() {
                         <p className="text-[11px] text-slate-400 line-clamp-2 leading-relaxed">{t.description}</p>
                       )}
 
+                      <div className="flex items-center justify-between gap-1.5 pt-0.5">
+                        <Link
+                          href={`/chat?projectId=${t.projectId}&taskId=${t.id}&taskTitle=${encodeURIComponent(t.title)}`}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-semibold bg-gradient-to-r from-cyan-500/15 to-indigo-500/15 hover:from-cyan-500/30 hover:to-indigo-500/30 text-cyan-300 border border-cyan-500/30 hover:border-cyan-400 transition-all shadow-sm"
+                          title="Открыть и решить эту задачу через OpenCode AI ассистента"
+                        >
+                          <Sparkles className="w-3 h-3 text-cyan-400" />
+                          <span>В OpenCode</span>
+                        </Link>
+                      </div>
+
                       <div className="pt-2 border-t border-slate-800/60 flex items-center justify-between text-[10px] font-mono text-slate-400">
                         <span
                           className={`px-1.5 py-0.5 rounded ${

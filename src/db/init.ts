@@ -9,7 +9,8 @@ export async function ensureDatabaseInitialized() {
   try {
     try {
       await client.execute('PRAGMA busy_timeout = 10000;');
-      await client.execute('PRAGMA journal_mode = WAL;');
+      // Use DELETE journal mode to support Docker bind mounts on Windows host without SHM errors
+      await client.execute('PRAGMA journal_mode = DELETE;');
     } catch {
       // ignore
     }

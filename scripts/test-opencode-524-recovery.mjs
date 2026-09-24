@@ -80,6 +80,33 @@ async function runTests() {
   assert(is524, 'Sample Cloudflare error should be detected as 524');
   console.log('✓ Cloudflare 524 pattern correctly recognized');
 
+  // Verify OpenCode standard message schema parsing (info.role + parts)
+  const mockOpenCodeMessages = [
+    {
+      info: { id: "msg_user", role: "user" },
+      parts: [{ type: "text", text: "Fix the bug" }]
+    },
+    {
+      info: { id: "msg_assistant", role: "assistant", finish: "stop", time: { completed: Date.now() } },
+      parts: [
+        { type: "step-start" },
+        { type: "text", text: "Bug has been successfully fixed." },
+        { type: "step-finish", reason: "stop" }
+      ]
+    }
+  ];
+
+  const assistantMsgs = mockOpenCodeMessages.filter(
+    (m) => ((m.info?.role || m.role || '').toLowerCase() === 'assistant')
+  );
+  assert(assistantMsgs.length === 1, 'Should find 1 assistant message');
+  const lastAss = assistantMsgs[0];
+  const parsedText = lastAss.parts.filter((p) => p.type === 'text').map((p) => p.text).join('\n\n');
+  assert.strictEqual(parsedText, 'Bug has been successfully fixed.');
+  const isGenerating = Boolean((lastAss.info && lastAss.info.finish !== 'stop' && !lastAss.info.time?.completed) || lastAss.status === 'in_progress');
+  assert.strictEqual(isGenerating, false, 'Should be marked as completed (not generating)');
+  console.log('✓ OpenCode standard message schema (info.role + parts) correctly parsed');
+
   // --- Test 4: Verify Host CRUD and foreign key cascades ---
   console.log('\n--- Step 4: Verify Hosts foreign key integrity during deletion ---');
   const testHostId = `host_test_fk_${Date.now()}`;
