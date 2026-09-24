@@ -58,6 +58,7 @@ import AddonSpoiler from '@/components/AddonSpoiler';
 import ContainerCards from '@/components/ContainerCards';
 import CreateTaskModal from '@/components/CreateTaskModal';
 import CreateRelationModal from '@/components/CreateRelationModal';
+import EditProjectModal from '@/components/EditProjectModal';
 
 export interface ProjectDetailViewProps {
   bannerSlot?: React.ReactNode;
@@ -77,6 +78,8 @@ export default function ProjectDetailView({ bannerSlot, headerActionSlot, params
   // Modals
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
   const [isRelationModalOpen, setIsRelationModalOpen] = useState(false);
+  // Редактирование базовых полей проекта (название, описание, сайт и т.д.)
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
 
   // Project Members & Access State
   const [members, setMembers] = useState<any[]>([]);
@@ -802,6 +805,16 @@ export default function ProjectDetailView({ bannerSlot, headerActionSlot, params
 
           {/* Interactive Status Switcher */}
           <div className="flex flex-col items-end gap-2 shrink-0">
+            {project.canEdit && (
+              <button
+                type="button"
+                onClick={() => setIsEditModalOpen(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-mono transition-colors"
+                title="Изменить название, описание, сайт и другие поля"
+              >
+                <Edit3 className="w-3.5 h-3.5" /> Редактировать
+              </button>
+            )}
             <label className="text-[10px] uppercase font-mono tracking-wider text-slate-400">Статус жизненного цикла</label>
             <select
               value={project.status}
@@ -2681,6 +2694,12 @@ export default function ProjectDetailView({ bannerSlot, headerActionSlot, params
         defaultSourceId={project.id}
         onClose={() => setIsRelationModalOpen(false)}
         onCreated={fetchProject}
+      />
+      <EditProjectModal
+        project={project}
+        isOpen={isEditModalOpen}
+        onClose={() => setIsEditModalOpen(false)}
+        onSaved={fetchProject}
       />
     </div>
   );
