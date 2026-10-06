@@ -38,6 +38,9 @@ jobs:
             node scripts/check-commit-msg.mjs
           fi
 
+      - name: Seed test database
+        run: node scripts/seed.mjs --demo-data
+
       - name: Run Multi-Containers & Ports Suite
         run: node scripts/test-multi-containers.mjs
 
