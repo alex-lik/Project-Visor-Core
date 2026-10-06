@@ -5,7 +5,6 @@ import { authenticateRequest, isProjectAllowed } from '@/lib/rbac';
 import { dispatchNotification } from '@/lib/notifications';
 import { eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await authenticateRequest(req);
   if (!auth) {
@@ -36,6 +35,20 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     if (body.tags) updateData.tags = JSON.stringify(body.tags);
     if (body.dueDate !== undefined) updateData.dueDate = body.dueDate ? Number(body.dueDate) : null;
     if (body.position !== undefined) updateData.position = Number(body.position);
+    if (body.color !== undefined) updateData.color = body.color || null;
+    if (body.checklists !== undefined) {
+      updateData.checklists = typeof body.checklists === 'string' ? body.checklists : JSON.stringify(body.checklists || []);
+    }
+    if (body.assigneeName !== undefined) updateData.assigneeName = body.assigneeName || null;
+    if (typeof body.progress === 'number') {
+      updateData.progress = Math.max(0, Math.min(100, Math.round(body.progress)));
+      updateData.progressMode = 'manual';
+    } else if (body.progressMode) {
+      updateData.progressMode = body.progressMode;
+    }
+    if (typeof body.isArchived === 'boolean') {
+      updateData.isArchived = body.isArchived ? 1 : 0;
+    }
 
     if (body.column && body.column !== task.column) {
       updateData.column = body.column;

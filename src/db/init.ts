@@ -130,10 +130,27 @@ export async function ensureDatabaseInitialized() {
         position INTEGER NOT NULL DEFAULT 0,
         tags TEXT DEFAULT '[]',
         due_date INTEGER,
+        is_archived INTEGER DEFAULT 0,
+        color TEXT,
+        checklists TEXT DEFAULT '[]',
+        progress INTEGER,
+        progress_mode TEXT DEFAULT 'auto',
+        assignee_name TEXT,
         last_run_id TEXT,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS kanban_task_comments (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL REFERENCES kanban_tasks(id) ON DELETE CASCADE,
+        author_type TEXT NOT NULL DEFAULT 'user',
+        author_name TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS idx_kanban_task_comments_task_id ON kanban_task_comments(task_id);
 
       CREATE TABLE IF NOT EXISTS metric_targets (
         id TEXT PRIMARY KEY,
@@ -207,6 +224,28 @@ export async function ensureDatabaseInitialized() {
       await client.execute('ALTER TABLE api_keys ADD COLUMN can_manage_projects INTEGER NOT NULL DEFAULT 0;');
     } catch {
       // column already exists
+    }
+    for (const sql of [
+      'ALTER TABLE kanban_tasks ADD COLUMN is_archived INTEGER DEFAULT 0;',
+      'ALTER TABLE kanban_tasks ADD COLUMN color TEXT;',
+      "ALTER TABLE kanban_tasks ADD COLUMN checklists TEXT DEFAULT '[]';",
+      'ALTER TABLE kanban_tasks ADD COLUMN progress INTEGER;',
+      "ALTER TABLE kanban_tasks ADD COLUMN progress_mode TEXT DEFAULT 'auto';",
+      'ALTER TABLE kanban_tasks ADD COLUMN assignee_name TEXT;',
+    ]) {
+      try {
+        await client.execute(sql);
+      } catch {
+        // column already exists
+      }
+    }
+    try {
+      await client.execute(
+        'CREATE TABLE IF NOT EXISTS kanban_task_comments (id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES kanban_tasks(id) ON DELETE CASCADE, author_type TEXT NOT NULL DEFAULT \'user\', author_name TEXT NOT NULL, content TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER);'
+      );
+      await client.execute('CREATE INDEX IF NOT EXISTS idx_kanban_task_comments_task_id ON kanban_task_comments(task_id);');
+    } catch {
+      // table already exists
     }
 
     // Ensure default admin user if none exists

@@ -124,9 +124,25 @@ export const kanbanTasks = sqliteTable('kanban_tasks', {
   position: integer('position').notNull().default(0),
   tags: text('tags').default('[]'), // JSON array
   dueDate: integer('due_date'),
+  isArchived: integer('is_archived').notNull().default(0), // 0: active, 1: archived
+  color: text('color'), // Trello card color cover: 'sky' | 'emerald' | 'amber' | 'rose' | 'purple' | 'indigo' | 'orange' | null
+  checklists: text('checklists').default('[]'), // JSON array: [{ id, title, items: [{ id, text, completed }] }]
+  progress: integer('progress'), // Optional progress 0-100
+  progressMode: text('progress_mode').default('auto'), // 'auto' (computed from checklists) | 'manual'
+  assigneeName: text('assignee_name'), // e.g. "Алексей" or "OpenCode Agent"
   lastRunId: text('last_run_id').references(() => opencodeRuns.id, { onDelete: 'set null' }),
   createdAt: integer('created_at').notNull(),
   updatedAt: integer('updated_at').notNull(),
+});
+
+export const kanbanTaskComments = sqliteTable('kanban_task_comments', {
+  id: text('id').primaryKey(),
+  taskId: text('task_id').notNull().references(() => kanbanTasks.id, { onDelete: 'cascade' }),
+  authorType: text('author_type').notNull().default('user'), // 'user' | 'agent' | 'system'
+  authorName: text('author_name').notNull(),
+  content: text('content').notNull(),
+  createdAt: integer('created_at').notNull(),
+  updatedAt: integer('updated_at'),
 });
 
 export const metricTargets = sqliteTable('metric_targets', {
@@ -207,6 +223,20 @@ export type ProjectRelation = typeof projectRelations.$inferSelect;
 export type InsertProjectRelation = typeof projectRelations.$inferInsert;
 export type KanbanTask = typeof kanbanTasks.$inferSelect;
 export type InsertKanbanTask = typeof kanbanTasks.$inferInsert;
+export type KanbanTaskComment = typeof kanbanTaskComments.$inferSelect;
+export type InsertKanbanTaskComment = typeof kanbanTaskComments.$inferInsert;
+
+export interface KanbanChecklistItem {
+  id: string;
+  text: string;
+  completed: boolean;
+}
+
+export interface KanbanChecklist {
+  id: string;
+  title: string;
+  items: KanbanChecklistItem[];
+}
 export type MetricTarget = typeof metricTargets.$inferSelect;
 export type InsertMetricTarget = typeof metricTargets.$inferInsert;
 export type ProjectMember = typeof projectMembers.$inferSelect;
