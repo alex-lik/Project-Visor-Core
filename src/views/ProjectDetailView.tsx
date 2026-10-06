@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -17,6 +17,7 @@ import {
   Save,
   Plus,
   Trash2,
+  Pencil,
   CheckCircle2,
   Clock,
   ArrowRight,
@@ -49,7 +50,7 @@ import {
   Sliders,
   Folder,
 } from 'lucide-react';
-import { STATUS_COLORS, RUNTIME_LABELS, RELATION_LABELS, SECRETS_TYPE_LABELS, formatDateTime } from '@/lib/utils';
+import { STATUS_COLORS, RUNTIME_LABELS, SECRETS_TYPE_LABELS, formatDateTime, fetchCustomRelationTypes, mergeRelationLabels, type CustomRelationTypeOption } from '@/lib/utils';
 import {
   ProjectContainer,
   normalizeContainers,
@@ -57,6 +58,7 @@ import {
 import AddonSpoiler from '@/components/AddonSpoiler';
 import ContainerCards from '@/components/ContainerCards';
 import CreateTaskModal from '@/components/CreateTaskModal';
+import KanbanBoard from '@/components/kanban/KanbanBoard';
 import CreateRelationModal from '@/components/CreateRelationModal';
 import EditProjectModal from '@/components/EditProjectModal';
 import OpenCodeChat from '@/components/OpenCodeChat';
@@ -79,6 +81,9 @@ export default function ProjectDetailView({ bannerSlot, headerActionSlot, params
   // Modals
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
   const [isRelationModalOpen, setIsRelationModalOpen] = useState(false);
+  const [editingRelation, setEditingRelation] = useState<any | null>(null);
+  const [customRelationTypes, setCustomRelationTypes] = useState<CustomRelationTypeOption[]>([]);
+  const relationLabels = useMemo(() => mergeRelationLabels(customRelationTypes), [customRelationTypes]);
   // Редактирование базовых полей проекта (название, описание, сайт и т.д.)
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
 
@@ -517,6 +522,7 @@ export default function ProjectDetailView({ bannerSlot, headerActionSlot, params
     fetchMembers();
     fetchOpenCodeRuns();
     fetchHostsList();
+    fetchCustomRelationTypes().then(setCustomRelationTypes).catch(() => {});
   }, [projectId]);
 
   useEffect(() => {
@@ -642,11 +648,32 @@ export default function ProjectDetailView({ bannerSlot, headerActionSlot, params
   const handleDeleteRelation = async (relationId: string) => {
     if (!confirm('Удалить эту связь между проектами?')) return;
     try {
-      await fetch(`/api/relations?id=${relationId}`, { method: 'DELETE' });
+      const res = await fetch(`/api/relations?id=${relationId}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        alert(data.error || 'Не удалось удалить связь');
+        return;
+      }
       fetchProject();
     } catch (err) {
       console.error(err);
     }
+  };
+
+  const handleEditRelation = (relation: any, direction: 'outgoing' | 'incoming') => {
+    setEditingRelation({
+      id: relation.id,
+      sourceProjectId: direction === 'outgoing' ? project.id : relation.sourceProjectId,
+      targetProjectId: direction === 'outgoing' ? relation.targetProjectId : project.id,
+      relationType: relation.relationType,
+      description: relation.description,
+    });
+    setIsRelationModalOpen(true);
+  };
+
+  const handleCloseRelationModal = () => {
+    setIsRelationModalOpen(false);
+    setEditingRelation(null);
   };
 
   const handleSaveDeployment = async (e: React.FormEvent) => {
@@ -1029,104 +1056,14 @@ export default function ProjectDetailView({ bannerSlot, headerActionSlot, params
 
       {/* TAB 1: KANBAN BOARD */}
       {activeTab === 'kanban' && (
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-slate-400 font-mono">
-              Перемещайте задачи между этапами. AI-агенты через MCP могут автоматически обновлять эти колонки.
-            </span>
-            <div className="flex items-center gap-2">
-              {headerActionSlot}
-              <button
-                onClick={() => setIsTaskModalOpen(true)}
-                className="px-3 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-semibold flex items-center gap-1.5 transition-colors"
-              >
-                <Plus className="w-3.5 h-3.5" /> Добавить задачу
-              </button>
-            </div>
-          </div>
-
-{bannerSlot}
-
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-4 overflow-x-auto min-w-[900px] pb-4">
-            {kanbanColumns.map((col) => {
-              const colTasks = project.tasks?.filter((t: any) => t.column === col.id) || [];
-              return (
-                <div key={col.id} className="p-3.5 rounded-2xl bg-[#0f172a] border border-slate-800 space-y-3">
-                  <div className="flex items-center justify-between pb-2 border-b border-slate-800/80">
-                    <span className="text-xs font-bold font-mono uppercase text-slate-300 flex items-center gap-2">
-                      {col.label}
-                    </span>
-                    <span className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-cyan-400">
-                      {colTasks.length}
-                    </span>
-                  </div>
-
-                  <div className="space-y-2.5 min-h-[300px]">
-                    {colTasks.map((t: any) => (
-                      <div
-                        key={t.id}
-                        className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 hover:border-slate-700 transition-all space-y-2 group shadow"
-                      >
-                        <div className="flex items-start justify-between gap-1">
-                          <h4 className="text-xs font-semibold text-white group-hover:text-cyan-300 transition-colors leading-snug">
-                            {t.title}
-                          </h4>
-                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <button
-                              onClick={() => handleSendTaskToOpenCode(t)}
-                              className="p-1 rounded text-cyan-400 hover:bg-cyan-500/20 hover:text-cyan-300 transition-colors"
-                              title="Отправить задачу в OpenCode"
-                            >
-                              <Zap className="w-3 h-3" />
-                            </button>
-                            <button
-                              onClick={() => handleDeleteTask(t.id)}
-                              className="text-slate-500 hover:text-rose-400 p-1 rounded transition-colors"
-                              title="Удалить"
-                            >
-                              <Trash2 className="w-3 h-3" />
-                            </button>
-                          </div>
-                        </div>
-
-                        {t.description && (
-                          <p className="text-[11px] text-slate-400 line-clamp-2">{t.description}</p>
-                        )}
-
-                        <div className="pt-2 border-t border-slate-800/60 flex items-center justify-between text-[10px] font-mono text-slate-400">
-                          <span
-                            className={`px-1.5 py-0.5 rounded ${
-                              t.priority === 'urgent'
-                                ? 'bg-rose-500/20 text-rose-400'
-                                : t.priority === 'high'
-                                ? 'bg-amber-500/20 text-amber-400'
-                                : 'bg-slate-800 text-slate-400'
-                            }`}
-                          >
-                            {t.priority}
-                          </span>
-
-                          {/* Quick Column Shift Dropdown */}
-                          <select
-                            value={t.column}
-                            onChange={(e) => handleMoveTask(t.id, e.target.value)}
-                            className="bg-slate-950 border border-slate-700 rounded px-1 py-0.5 text-[10px] text-slate-300 focus:outline-none"
-                          >
-                            <option value="backlog">Бэклог</option>
-                            <option value="todo">To Do</option>
-                            <option value="in_progress">В работе</option>
-                            <option value="review">Тест</option>
-                            <option value="done">Готово</option>
-                          </select>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
+        <KanbanBoard
+          projectId={project.id}
+          showProjectFilter={false}
+          headerSlot={headerActionSlot}
+          bannerSlot={bannerSlot}
+          onTasksChange={fetchProject}
+          onSendToOpenCode={handleSendTaskToOpenCode}
+        />
       )}
 
       {/* TAB 2: OVERVIEW & DEPLOYMENT */}
@@ -1558,7 +1495,10 @@ export default function ProjectDetailView({ bannerSlot, headerActionSlot, params
             </div>
 
             <button
-              onClick={() => setIsRelationModalOpen(true)}
+              onClick={() => {
+                setEditingRelation(null);
+                setIsRelationModalOpen(true);
+              }}
               className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors"
             >
               <Plus className="w-4 h-4" /> Добавить связь
@@ -1576,7 +1516,7 @@ export default function ProjectDetailView({ bannerSlot, headerActionSlot, params
             ) : (
               <div className="space-y-2">
                 {project.relations?.outgoing?.map((r: any) => {
-                  const meta = RELATION_LABELS[r.relationType] || { label: r.relationType, color: '#94a3b8' };
+                  const meta = relationLabels[r.relationType] || { label: r.relationType, color: '#94a3b8' };
                   return (
                     <div
                       key={r.id}
@@ -1599,13 +1539,22 @@ export default function ProjectDetailView({ bannerSlot, headerActionSlot, params
                         {r.description && <span className="text-xs text-slate-400">— {r.description}</span>}
                       </div>
 
-                      <button
-                        onClick={() => handleDeleteRelation(r.id)}
-                        className="text-slate-500 hover:text-rose-400 p-1"
-                        title="Удалить связь"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          onClick={() => handleEditRelation(r, 'outgoing')}
+                          className="text-slate-500 hover:text-cyan-400 p-1"
+                          title="Редактировать связь"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteRelation(r.id)}
+                          className="text-slate-500 hover:text-rose-400 p-1"
+                          title="Удалить связь"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
                   );
                 })}
@@ -1624,7 +1573,7 @@ export default function ProjectDetailView({ bannerSlot, headerActionSlot, params
             ) : (
               <div className="space-y-2">
                 {project.relations?.incoming?.map((r: any) => {
-                  const meta = RELATION_LABELS[r.relationType] || { label: r.relationType, color: '#94a3b8' };
+                  const meta = relationLabels[r.relationType] || { label: r.relationType, color: '#94a3b8' };
                   return (
                     <div
                       key={r.id}
@@ -1647,13 +1596,22 @@ export default function ProjectDetailView({ bannerSlot, headerActionSlot, params
                         {r.description && <span className="text-xs text-slate-400">— {r.description}</span>}
                       </div>
 
-                      <button
-                        onClick={() => handleDeleteRelation(r.id)}
-                        className="text-slate-500 hover:text-rose-400 p-1"
-                        title="Удалить связь"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          onClick={() => handleEditRelation(r, 'incoming')}
+                          className="text-slate-500 hover:text-cyan-400 p-1"
+                          title="Редактировать связь"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteRelation(r.id)}
+                          className="text-slate-500 hover:text-rose-400 p-1"
+                          title="Удалить связь"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
                   );
                 })}
@@ -2047,8 +2005,12 @@ export default function ProjectDetailView({ bannerSlot, headerActionSlot, params
       <CreateRelationModal
         isOpen={isRelationModalOpen}
         defaultSourceId={project.id}
-        onClose={() => setIsRelationModalOpen(false)}
-        onCreated={fetchProject}
+        editingRelation={editingRelation}
+        onClose={handleCloseRelationModal}
+        onCreated={() => {
+          fetchProject();
+          fetchCustomRelationTypes().then(setCustomRelationTypes).catch(() => {});
+        }}
       />
       <EditProjectModal
         project={project}

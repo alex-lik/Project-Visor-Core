@@ -25,7 +25,9 @@ import {
   Pencil,
   Trash2,
   Terminal,
+  Folder,
   FolderOpen,
+  FolderGit2,
   Brain,
   StopCircle,
   Layers,
@@ -38,6 +40,7 @@ import {
   FileText,
   CheckCircle2,
   Circle,
+  HelpCircle,
 } from 'lucide-react';
 
 export interface OpenCodeChatPart {
@@ -96,6 +99,7 @@ export interface OpenCodeSessionSummary {
   lastRunId?: string;
   lastPrompt?: string;
   lastError?: string;
+  isCurrentProject?: boolean;
 }
 
 export interface OpenCodeModelOption {
@@ -306,7 +310,41 @@ function MessageExecutionSteps({
           );
         }
 
-        // Generic tool fallback (webfetch, todowrite, question, etc.)
+        // Tool: Question
+        if (tool === 'question') {
+          const rawQ = state.input?.questions || state.input;
+          const questionsList: any[] = Array.isArray(rawQ) ? rawQ : rawQ?.question ? [rawQ] : [];
+          return (
+            <div
+              key={partId}
+              className="p-3 rounded-xl border border-amber-500/40 bg-amber-950/20 text-xs shadow-sm space-y-1.5 font-sans"
+            >
+              <div className="flex items-center justify-between text-amber-400 font-semibold">
+                <div className="flex items-center gap-1.5">
+                  <HelpCircle className="w-3.5 h-3.5 shrink-0" />
+                  <span>Уточняющий вопрос от агента</span>
+                </div>
+                {isRunning ? (
+                  <span className="inline-flex items-center gap-1 text-[10px] text-amber-300 animate-pulse">
+                    <RefreshCw className="w-3 h-3 animate-spin" /> Ожидает ответа пользователя
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 text-[10px] text-emerald-400">
+                    <Check className="w-3 h-3" /> Ответ получен
+                  </span>
+                )}
+              </div>
+              {questionsList.map((q: any, qIdx: number) => (
+                <div key={qIdx} className="text-slate-200">
+                  {q.header && <span className="text-amber-300 font-bold mr-1.5">[{q.header}]</span>}
+                  <span className="font-medium text-slate-100">{q.question}</span>
+                </div>
+              ))}
+            </div>
+          );
+        }
+
+        // Generic tool fallback (webfetch, todowrite, etc.)
         return (
           <div
             key={partId}
@@ -411,7 +449,107 @@ export default function OpenCodeChat({
   const [deployDirectory, setDeployDirectory] = useState<string>(
     project?.deployment?.deployPath || ''
   );
+  // OpenCode Projects on Host (GET /project and GET /project/current)
+  const [openCodeProjects, setOpenCodeProjects] = useState<Array<{
+    id: string;
+    name?: string;
+    worktree?: string;
+    path?: string;
+    directory?: string;
+    vcs?: { branch?: string; default_branch?: string } | string;
+    icon?: { color?: string; override?: string };
+    sessionsCount?: number;
+  }>>([]);
+  const [currentOpenCodeProject, setCurrentOpenCodeProject] = useState<{
+    id: string;
+    name?: string;
+    worktree?: string;
+    path?: string;
+    directory?: string;
+    vcs?: { branch?: string; default_branch?: string } | string;
+    icon?: { color?: string; override?: string };
+    sessionsCount?: number;
+  } | null>(null);
+  const [isProjectSelectorOpen, setIsProjectSelectorOpen] = useState(false);
+  const [loadingOpenCodeProjects, setLoadingOpenCodeProjects] = useState(false);
+  const [customDirInput, setCustomDirInput] = useState('');
+  const [savingDir, setSavingDir] = useState(false);
+  // Sessions filtering: only this project's sessions vs all host sessions
+  const [filterOnlyCurrentProject, setFilterOnlyCurrentProject] = useState(true);
+  const [totalHostSessionsCount, setTotalHostSessionsCount] = useState<number | null>(null);
+  const [projectSessionsCount, setProjectSessionsCount] = useState<number | null>(null);
   const [generalError, setGeneralError] = useState<string | null>(null);
+
+  // Server Directory Browser Modal (DialogSelectDirectory)
+  const [isDirPickerOpen, setIsDirPickerOpen] = useState(false);
+  const [dirPickerPath, setDirPickerPath] = useState('/opt');
+  const [dirPickerItems, setDirPickerItems] = useState<Array<{ name: string; path?: string; type: string }>>([]);
+  const [loadingDirPicker, setLoadingDirPicker] = useState(false);
+
+  // Edit Project Modal (DialogEditProject)
+  const [isEditProjectModalOpen, setIsEditProjectModalOpen] = useState(false);
+  const [editingProject, setEditingProject] = useState<{
+    id: string;
+    name: string;
+    worktree: string;
+    color: string;
+  } | null>(null);
+  const [savingProjectEdit, setSavingProjectEdit] = useState(false);
+
+  // Delete Project Modal (DialogDeleteProject)
+  const [projectToDelete, setProjectToDelete] = useState<{
+    id: string;
+    name: string;
+    worktree: string;
+  } | null>(null);
+  const [isDeletingProject, setIsDeletingProject] = useState(false);
+
+  // Pending questions from OpenCode server
+  const [pendingQuestions, setPendingQuestions] = useState<Array<{
+    id: string;
+    sessionID: string;
+    questions: Array<{
+      header?: string;
+      question: string;
+      options: Array<{ label: string; description?: string }>;
+      multiple?: boolean;
+    }>;
+  }>>([]);
+  const [selectedAnswers, setSelectedAnswers] = useState<Record<string, Record<number, string[]>>>({});
+  const [isSubmittingAnswer, setIsSubmittingAnswer] = useState(false);
+
+  // Encode directory for official OpenCode Web UI route (/:dir/session/:id)
+  const encodeOpenCodeDirectoryRoute = (dir?: string | null): string => {
+    if (!dir || dir.trim() === '' || dir.trim() === '/') return '';
+    try {
+      const t = new TextEncoder().encode(dir.trim());
+      const n = Array.from(t, (r) => String.fromCharCode(r)).join('');
+      return btoa(n).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+    } catch {
+      return '';
+    }
+  };
+
+  // Computed official OpenCode Web UI URL pointing directly to this project's directory & active session
+  const opencodeWebUrl = useMemo(() => {
+    const h = hostInfo || project?.host;
+    if (!h) return null;
+    const rawHost = h.opencodeHost || h.ip;
+    if (!rawHost) return null;
+    let base = '';
+    if (rawHost.startsWith('http://') || rawHost.startsWith('https://')) {
+      base = rawHost.replace(/\/+$/, '');
+    } else {
+      const proto = h.opencodeUseHttps ? 'https' : 'http';
+      const port = h.opencodePort ? `:${h.opencodePort}` : '';
+      base = `${proto}://${rawHost}${port}`;
+    }
+    const dirKey = encodeOpenCodeDirectoryRoute(deployDirectory);
+    if (dirKey) {
+      return activeSessionId ? `${base}/${dirKey}/session/${activeSessionId}` : `${base}/${dirKey}`;
+    }
+    return activeSessionId ? `${base}/session/${activeSessionId}` : base;
+  }, [hostInfo, project?.host, deployDirectory, activeSessionId]);
 
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -508,10 +646,12 @@ export default function OpenCodeChat({
   };
 
   // Fetch VCS / Git Info
-  const fetchVcs = async () => {
+  const fetchVcs = async (dir?: string) => {
     if (!projectId) return;
     try {
-      const res = await fetch(`/api/projects/${projectId}/opencode/vcs`);
+      const d = dir !== undefined ? dir : deployDirectory;
+      const q = d ? `?directory=${encodeURIComponent(d)}` : '';
+      const res = await fetch(`/api/projects/${projectId}/opencode/vcs${q}`);
       if (res.ok) {
         const data = await res.json();
         if (data.vcs) {
@@ -521,6 +661,247 @@ export default function OpenCodeChat({
     } catch {}
   };
 
+  // Fetch OpenCode projects on the host (GET /project and GET /project/current)
+  const fetchOpenCodeProjects = async (targetDir?: string) => {
+    if (!projectId) return;
+    setLoadingOpenCodeProjects(true);
+    try {
+      const d = targetDir !== undefined ? targetDir : deployDirectory;
+      const q = d ? `?directory=${encodeURIComponent(d)}` : '';
+      const res = await fetch(`/api/projects/${projectId}/opencode/projects${q}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.projects)) {
+          setOpenCodeProjects(data.projects);
+        }
+        if (data.current) {
+          setCurrentOpenCodeProject(data.current);
+        }
+        if (data.deployPath && !deployDirectory) {
+          setDeployDirectory(data.deployPath);
+          setCustomDirInput(data.deployPath);
+        }
+        if (data.vcs && !vcsInfo) {
+          setVcsInfo(data.vcs);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch OpenCode projects:', err);
+    } finally {
+      setLoadingOpenCodeProjects(false);
+    }
+  };
+
+  // Switch or select OpenCode project / directory
+  const handleSelectOpenCodeProject = async (targetPath: string, persistToVisor = true) => {
+    const cleanPath = targetPath.trim();
+    if (!cleanPath) return;
+
+    setDeployDirectory(cleanPath);
+    setCustomDirInput(cleanPath);
+
+    // Immediately resolve and set currentOpenCodeProject from local list
+    const cleanNorm = cleanPath.toLowerCase().replace(/\\/g, '/').replace(/\/+$/, '');
+    const matched = openCodeProjects.find((p) => {
+      const pNorm = ((p as any).canonical || p.worktree || p.path || p.directory || '').toLowerCase().replace(/\\/g, '/').replace(/\/+$/, '');
+      return pNorm === cleanNorm;
+    });
+    if (matched) {
+      setCurrentOpenCodeProject(matched);
+      if (matched.vcs) {
+        setVcsInfo(typeof matched.vcs === 'string' ? { branch: matched.vcs } : matched.vcs);
+      }
+    } else {
+      const folderName = cleanPath.split(/[/\\]/).filter(Boolean).pop() || cleanPath;
+      setCurrentOpenCodeProject({
+        id: cleanPath,
+        name: folderName,
+        worktree: cleanPath,
+        path: cleanPath,
+        directory: cleanPath,
+      });
+    }
+
+    if (persistToVisor) {
+      setSavingDir(true);
+      try {
+        await fetch(`/api/projects/${projectId}/opencode/projects`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ directory: cleanPath }),
+        });
+      } catch (err) {
+        console.error('Failed to save project directory:', err);
+      } finally {
+        setSavingDir(false);
+      }
+    }
+
+    fetchVcs(cleanPath);
+    fetchOpenCodeProjects(cleanPath);
+    fetchSessions(undefined, cleanPath);
+    if (isExplorerOpen) {
+      fetchDirectoryFiles(cleanPath);
+    }
+    setIsProjectSelectorOpen(false);
+  };
+
+  // Directory Picker Modal Handlers
+  const fetchDirPickerItems = async (dirPath: string) => {
+    if (!projectId) return;
+    setLoadingDirPicker(true);
+    try {
+      const res = await fetch(
+        `/api/projects/${projectId}/opencode/files?directory=${encodeURIComponent(dirPath)}&path=.`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        const files: any[] = Array.isArray(data.files) ? data.files : [];
+        setDirPickerItems(files);
+        setDirPickerPath(dirPath);
+      }
+    } catch (err) {
+      console.error('Failed to list files in directory picker:', err);
+    } finally {
+      setLoadingDirPicker(false);
+    }
+  };
+
+  const handleOpenDirPicker = (startDir?: string) => {
+    const start = startDir || deployDirectory || '/opt';
+    fetchDirPickerItems(start);
+    setIsDirPickerOpen(true);
+  };
+
+  const handleDirPickerNavigate = (folderPath: string) => {
+    fetchDirPickerItems(folderPath);
+  };
+
+  const handleDirPickerSelect = (selectedPath: string) => {
+    setIsDirPickerOpen(false);
+    handleSelectOpenCodeProject(selectedPath, true);
+  };
+
+  // Edit Project Modal Handlers
+  const handleOpenEditProject = (p: any, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const curPath = p.worktree || p.canonical || p.path || p.directory || deployDirectory;
+    setEditingProject({
+      id: p.id || 'global',
+      name: p.name || curPath.split(/[/\\]/).filter(Boolean).pop() || 'Project',
+      worktree: curPath,
+      color: p.icon?.color || 'cyan',
+    });
+    setIsEditProjectModalOpen(true);
+  };
+
+  const handleSaveProjectEdit = async () => {
+    if (!projectId || !editingProject) return;
+    setSavingProjectEdit(true);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/opencode/projects`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId: editingProject.id,
+          name: editingProject.name,
+          directory: editingProject.worktree,
+          icon: editingProject.color ? { color: editingProject.color } : undefined,
+        }),
+      });
+      if (res.ok) {
+        // Immediate local state update
+        setOpenCodeProjects((prev) =>
+          prev.map((item) => {
+            const itemPath = (item as any).canonical || item.worktree || item.path || item.directory || '';
+            if (item.id === editingProject.id || itemPath === editingProject.worktree) {
+              return { ...item, name: editingProject.name, icon: { color: editingProject.color } };
+            }
+            return item;
+          })
+        );
+        setCurrentOpenCodeProject((prev) => {
+          if (!prev) return prev;
+          const prevPath = (prev as any).canonical || prev.worktree || prev.path || prev.directory || '';
+          if (prev.id === editingProject.id || prevPath === editingProject.worktree) {
+            return { ...prev, name: editingProject.name, icon: { color: editingProject.color } };
+          }
+          return prev;
+        });
+        setIsEditProjectModalOpen(false);
+        fetchOpenCodeProjects(deployDirectory);
+      }
+    } catch (err) {
+      console.error('Failed to save project edit:', err);
+    } finally {
+      setSavingProjectEdit(false);
+    }
+  };
+
+  // Delete Project Handlers
+  const handleConfirmDeleteProject = (p: any, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const curPath = (p as any).canonical || p.worktree || p.path || p.directory || deployDirectory || '';
+    setProjectToDelete({
+      id: p.id || curPath || 'global',
+      name: p.name || curPath.split(/[/\\]/).filter(Boolean).pop() || 'Project',
+      worktree: curPath,
+    });
+  };
+
+  const handleExecuteDeleteProject = async () => {
+    if (!projectToDelete || !projectId) return;
+    setIsDeletingProject(true);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/opencode/projects`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId: projectToDelete.id,
+          directory: projectToDelete.worktree,
+          unlinkDeployPath: true,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Не удалось удалить проект');
+      }
+
+      // Filter out deleted project from list
+      const targetNorm = projectToDelete.worktree.toLowerCase().replace(/\\/g, '/').replace(/\/+$/, '');
+      const remainingProjects = openCodeProjects.filter((p) => {
+        const pNorm = ((p as any).canonical || p.worktree || p.path || p.directory || '').toLowerCase().replace(/\\/g, '/').replace(/\/+$/, '');
+        return pNorm !== targetNorm && p.id !== projectToDelete.id;
+      });
+      setOpenCodeProjects(remainingProjects);
+
+      // If active project was deleted, switch to next available or reset
+      const curNorm = (deployDirectory || '').toLowerCase().replace(/\\/g, '/').replace(/\/+$/, '');
+      if (curNorm === targetNorm) {
+        if (remainingProjects.length > 0) {
+          const nextPrj = remainingProjects[0];
+          const nextPath = (nextPrj as any).canonical || nextPrj.worktree || nextPrj.path || nextPrj.directory || '';
+          handleSelectOpenCodeProject(nextPath, true);
+        } else {
+          setDeployDirectory('');
+          setCustomDirInput('');
+          setCurrentOpenCodeProject(null);
+          setVcsInfo(null);
+          fetchSessions(undefined, '');
+        }
+      }
+
+      setProjectToDelete(null);
+      setIsEditProjectModalOpen(false);
+      fetchOpenCodeProjects(deployDirectory);
+    } catch (err: any) {
+      alert(err.message || 'Ошибка удаления проекта');
+    } finally {
+      setIsDeletingProject(false);
+    }
+  };
+
+  // Fetch Session Todos Checklist
   // Fetch Session Todos Checklist
   const fetchSessionTodos = async (sessionId: string) => {
     if (!projectId || !sessionId) return;
@@ -533,6 +914,158 @@ export default function OpenCodeChat({
         }
       }
     } catch {}
+  };
+
+  // Fetch pending interactive questions from agent (GET /session/:id/question)
+  const fetchSessionQuestions = async (sessionId: string) => {
+    if (!projectId || !sessionId) return;
+    try {
+      const d = deployDirectory;
+      const q = d ? `?directory=${encodeURIComponent(d)}` : '';
+      const res = await fetch(`/api/projects/${projectId}/opencode/sessions/${sessionId}/question${q}`);
+      if (res.ok) {
+        const data = await res.json();
+        const qList = Array.isArray(data.questions) ? data.questions : [];
+        setPendingQuestions(qList);
+
+        // Pre-select recommended or first option by default
+        setSelectedAnswers((prev) => {
+          const next = { ...prev };
+          for (const item of qList) {
+            if (!next[item.id]) {
+              next[item.id] = {};
+              (item.questions || []).forEach((q: any, idx: number) => {
+                const recOption = q.options?.find(
+                  (o: any) =>
+                    o.label?.toLowerCase().includes('(recommended)') ||
+                    o.label?.toLowerCase().includes('рекомендован')
+                );
+                const defaultOpt = recOption || q.options?.[0];
+                if (defaultOpt) {
+                  next[item.id][idx] = [defaultOpt.label];
+                } else {
+                  next[item.id][idx] = [];
+                }
+              });
+            }
+          }
+          return next;
+        });
+      }
+    } catch (err) {
+      console.error('Failed to fetch session questions:', err);
+    }
+  };
+
+  // Select or toggle an option for a question
+  const handleSelectOption = (
+    questionId: string,
+    qIdx: number,
+    label: string,
+    isMultiple = false
+  ) => {
+    setSelectedAnswers((prev) => {
+      const currentQMap = prev[questionId] || {};
+      const currentList = currentQMap[qIdx] || [];
+
+      let newList: string[];
+      if (isMultiple) {
+        if (currentList.includes(label)) {
+          newList = currentList.filter((item) => item !== label);
+        } else {
+          newList = [...currentList, label];
+        }
+      } else {
+        newList = [label];
+      }
+
+      return {
+        ...prev,
+        [questionId]: {
+          ...currentQMap,
+          [qIdx]: newList,
+        },
+      };
+    });
+  };
+
+  // Reply to question with selected answers
+  const handleReplyQuestion = async (questionId: string) => {
+    if (!projectId || !activeSessionId || isSubmittingAnswer) return;
+    const qItem = pendingQuestions.find((q) => q.id === questionId);
+    if (!qItem) return;
+
+    const currentSelection = selectedAnswers[questionId] || {};
+    const answers: string[][] = (qItem.questions || []).map((_, idx) => currentSelection[idx] || []);
+
+    setIsSubmittingAnswer(true);
+    try {
+      const d = deployDirectory;
+      const q = d ? `?directory=${encodeURIComponent(d)}` : '';
+      const res = await fetch(
+        `/api/projects/${projectId}/opencode/sessions/${activeSessionId}/question/${questionId}/reply${q}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ answers, directory: d || undefined }),
+        }
+      );
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Не удалось отправить ответ');
+      }
+
+      // Remove question from pending list and resume generation state
+      setPendingQuestions((prev) => prev.filter((q) => q.id !== questionId));
+      setIsGenerating(true);
+
+      setTimeout(() => {
+        if (activeSessionId) {
+          fetchSessionMessages(activeSessionId);
+          fetchSessionQuestions(activeSessionId);
+        }
+      }, 800);
+    } catch (err: any) {
+      alert(err.message || 'Ошибка отправки ответа на вопрос');
+    } finally {
+      setIsSubmittingAnswer(false);
+    }
+  };
+
+  // Reject / skip question
+  const handleRejectQuestion = async (questionId: string) => {
+    if (!projectId || !activeSessionId || isSubmittingAnswer) return;
+    setIsSubmittingAnswer(true);
+    try {
+      const d = deployDirectory;
+      const q = d ? `?directory=${encodeURIComponent(d)}` : '';
+      const res = await fetch(
+        `/api/projects/${projectId}/opencode/sessions/${activeSessionId}/question/${questionId}/reject${q}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ directory: d || undefined }),
+        }
+      );
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Не удалось отклонить вопрос');
+      }
+
+      setPendingQuestions((prev) => prev.filter((q) => q.id !== questionId));
+      setIsGenerating(true);
+
+      setTimeout(() => {
+        if (activeSessionId) {
+          fetchSessionMessages(activeSessionId);
+          fetchSessionQuestions(activeSessionId);
+        }
+      }, 800);
+    } catch (err: any) {
+      alert(err.message || 'Ошибка отклонения вопроса');
+    } finally {
+      setIsSubmittingAnswer(false);
+    }
   };
 
   // Fetch project's Kanban tasks for quick linking & status changes
@@ -592,12 +1125,19 @@ export default function OpenCodeChat({
   };
 
   // 3. Fetch Sessions List for Project
-  const fetchSessions = async (preferSessionId?: string) => {
+  const fetchSessions = async (preferSessionId?: string, overrideDir?: string, showAllOverride?: boolean) => {
     if (!projectId) return;
     setLoadingSessions(true);
     setGeneralError(null);
     try {
-      const res = await fetch(`/api/projects/${projectId}/opencode/sessions`);
+      const d = overrideDir !== undefined ? overrideDir : deployDirectory;
+      const shouldShowAll = showAllOverride !== undefined ? showAllOverride : !filterOnlyCurrentProject;
+      const params = new URLSearchParams();
+      if (d) params.set('directory', d);
+      if (shouldShowAll) params.set('all', 'true');
+      const q = params.toString() ? `?${params.toString()}` : '';
+
+      const res = await fetch(`/api/projects/${projectId}/opencode/sessions${q}`);
       const data = await res.json();
       if (data.host) {
         setHostInfo(data.host);
@@ -605,8 +1145,14 @@ export default function OpenCodeChat({
           fetchModels(data.host.id);
         }
       }
-      if (data.project?.deployPath) {
+      if (data.project?.deployPath && !deployDirectory && !overrideDir) {
         setDeployDirectory(data.project.deployPath);
+      }
+      if (typeof data.allSessionsCount === 'number') {
+        setTotalHostSessionsCount(data.allSessionsCount);
+      }
+      if (typeof data.projectSessionsCount === 'number') {
+        setProjectSessionsCount(data.projectSessionsCount);
       }
       if (data.error && (!data.sessions || data.sessions.length === 0)) {
         setGeneralError(data.error);
@@ -615,10 +1161,17 @@ export default function OpenCodeChat({
       setSessions(list);
 
       // Select session
-      if (preferSessionId) {
+      if (preferSessionId && list.some((s) => s.id === preferSessionId)) {
         setActiveSessionId(preferSessionId);
-      } else if (!activeSessionId && list.length > 0) {
-        setActiveSessionId(list[0].id);
+      } else if (list.length > 0) {
+        if (!activeSessionId || !list.some((s) => s.id === activeSessionId)) {
+          setActiveSessionId(list[0].id);
+        }
+      } else {
+        setActiveSessionId(null);
+        setMessages([]);
+        setDiff(null);
+        setTodos([]);
       }
     } catch (err: any) {
       setGeneralError(err.message || 'Ошибка загрузки сессий');
@@ -627,18 +1180,45 @@ export default function OpenCodeChat({
     }
   };
 
+  // Хронологический порядок: старые вверху, новые внизу.
+  // Бэкенд уже сортирует, но страхуемся и на фронте (API может отдать newest-first).
+  const sortMessagesChronological = (list: OpenCodeChatMessage[]) =>
+    [...list].sort((a, b) => {
+      const ta = typeof a.createdAt === 'number' ? a.createdAt : null;
+      const tb = typeof b.createdAt === 'number' ? b.createdAt : null;
+      if (ta !== null && tb !== null && ta !== tb) return ta - tb;
+      if (ta !== null && tb === null) return -1;
+      if (ta === null && tb !== null) return 1;
+      return 0;
+    });
+
   // 4. Fetch Messages for Active Session
   const fetchSessionMessages = async (sessionId: string, silent = false) => {
     if (!projectId || !sessionId) return;
     if (!silent) setLoadingMessages(true);
     try {
-      const res = await fetch(`/api/projects/${projectId}/opencode/sessions/${sessionId}`);
+      const q = deployDirectory ? `?directory=${encodeURIComponent(deployDirectory)}` : '';
+      const res = await fetch(`/api/projects/${projectId}/opencode/sessions/${sessionId}${q}`);
       if (res.ok) {
         const data = await res.json();
-        setMessages(Array.isArray(data.messages) ? data.messages : []);
+        const msgs = sortMessagesChronological(Array.isArray(data.messages) ? data.messages : []);
+        if (silent) {
+          // Во время live-polling не дёргаем скролл, если пользователь читает старые сообщения
+          const el = messagesContainerRef.current;
+          const wasNearBottom = el ? el.scrollHeight - el.scrollTop - el.clientHeight < 150 : true;
+          setMessages(msgs);
+          if (wasNearBottom) {
+            setTimeout(() => scrollToBottom(), 50);
+          }
+        } else {
+          setMessages(msgs);
+          // После загрузки сессии показываем новые сообщения внизу
+          setTimeout(() => scrollToBottom(), 50);
+        }
         setDiff(data.diff || null);
-        setIsGenerating(Boolean(data.isGenerating));
-        if (!data.isGenerating) {
+        const generating = msgs.length > 0 && Boolean(data.isGenerating);
+        setIsGenerating(generating);
+        if (!generating) {
           setCloudflare524Notice(null);
         }
 
@@ -658,8 +1238,9 @@ export default function OpenCodeChat({
           setDeployDirectory(data.directory);
         }
 
-        // Also fetch session todos
+        // Also fetch session todos and pending questions
         fetchSessionTodos(sessionId);
+        fetchSessionQuestions(sessionId);
       }
     } catch (err: any) {
       if (!silent) {
@@ -780,7 +1361,8 @@ export default function OpenCodeChat({
     setLoadingFiles(true);
     try {
       const pathParam = dirPath !== undefined ? `?path=${encodeURIComponent(dirPath)}` : '';
-      const res = await fetch(`/api/projects/${projectId}/opencode/files${pathParam}`);
+      const dirParam = deployDirectory ? `${pathParam ? '&' : '?'}directory=${encodeURIComponent(deployDirectory)}` : '';
+      const res = await fetch(`/api/projects/${projectId}/opencode/files${pathParam}${dirParam}`);
       if (res.ok) {
         const data = await res.json();
         setFilesList(Array.isArray(data.files) ? data.files : []);
@@ -797,8 +1379,9 @@ export default function OpenCodeChat({
   const handleViewFileContent = async (filePath: string) => {
     if (!projectId) return;
     try {
+      const dirParam = deployDirectory ? `&directory=${encodeURIComponent(deployDirectory)}` : '';
       const res = await fetch(
-        `/api/projects/${projectId}/opencode/files?action=content&path=${encodeURIComponent(filePath)}`
+        `/api/projects/${projectId}/opencode/files?action=content&path=${encodeURIComponent(filePath)}${dirParam}`
       );
       if (res.ok) {
         const data = await res.json();
@@ -815,8 +1398,9 @@ export default function OpenCodeChat({
     if (!q || !projectId) return;
     setLoadingSearch(true);
     try {
+      const dirParam = deployDirectory ? `&directory=${encodeURIComponent(deployDirectory)}` : '';
       const res = await fetch(
-        `/api/projects/${projectId}/opencode/search?type=${searchType}&q=${encodeURIComponent(q)}`
+        `/api/projects/${projectId}/opencode/search?type=${searchType}&q=${encodeURIComponent(q)}${dirParam}`
       );
       if (res.ok) {
         const data = await res.json();
@@ -835,6 +1419,7 @@ export default function OpenCodeChat({
     fetchKanbanTasks();
     fetchAgents();
     fetchVcs();
+    fetchOpenCodeProjects();
 
     // Restore agent preference
     if (typeof window !== 'undefined') {
@@ -857,15 +1442,17 @@ export default function OpenCodeChat({
     }
   }, [initialTaskId, initialTaskTitle]);
 
-  // Load messages when active session changes
+  // Load messages and questions when active session changes
   useEffect(() => {
     if (activeSessionId) {
       fetchSessionMessages(activeSessionId);
+      fetchSessionQuestions(activeSessionId);
       setShareUrl(null);
     } else {
       setMessages([]);
       setDiff(null);
       setTodos([]);
+      setPendingQuestions([]);
     }
   }, [activeSessionId]);
 
@@ -892,17 +1479,18 @@ export default function OpenCodeChat({
     }
   }, [activeSession, availableModels]);
 
-
-  // Auto-polling when generation is running (every 1.5s for live tool steps)
+  // Auto-polling when generation is running or questions are pending (every 1.5s for live tool steps)
   useEffect(() => {
-    if (!isGenerating || !activeSessionId) return;
+    if (!activeSessionId) return;
+    if (!isGenerating && pendingQuestions.length === 0) return;
 
     const interval = setInterval(() => {
       fetchSessionMessages(activeSessionId, true);
+      fetchSessionQuestions(activeSessionId);
     }, 1500);
 
     return () => clearInterval(interval);
-  }, [isGenerating, activeSessionId]);
+  }, [isGenerating, activeSessionId, pendingQuestions.length]);
 
   // Create New Session
   const handleCreateSession = async () => {
@@ -1002,7 +1590,11 @@ export default function OpenCodeChat({
       if (activeSessionId === targetId) {
         setActiveSessionId(remaining.length > 0 ? remaining[0].id : null);
       }
+      if (editingSessionId === targetId) {
+        setEditingSessionId(null);
+      }
       setSessionToDelete(null);
+      fetchOpenCodeProjects(deployDirectory);
     } catch (err: any) {
       alert(err.message || 'Ошибка удаления сессии');
     } finally {
@@ -1058,6 +1650,27 @@ export default function OpenCodeChat({
       scrollToBottom();
     }, 50);
 
+    // Detect linked Kanban task
+    let linkedTaskId = selectedTaskId || undefined;
+    if (!linkedTaskId) {
+      const match = prompt.match(/Задача из Kanban: ["«]([^"»]+)["»]/i);
+      if (match) {
+        const found = kanbanTasks.find((t: any) => t.title.toLowerCase() === match[1].toLowerCase());
+        if (found) linkedTaskId = found.id;
+      }
+    }
+
+    if (linkedTaskId) {
+      const modelTag = selectedModel ? (selectedModel.includes('/') ? selectedModel.split('/').pop() : selectedModel) : 'Agent';
+      setKanbanTasks((prev) =>
+        prev.map((t: any) =>
+          t.id === linkedTaskId
+            ? { ...t, column: 'in_progress', assigneeName: `OpenCode Agent (${modelTag})` }
+            : t
+        )
+      );
+    }
+
     try {
       const res = await fetch(`/api/projects/${projectId}/opencode/sessions/${targetSessionId}`, {
         method: 'POST',
@@ -1068,6 +1681,8 @@ export default function OpenCodeChat({
           variant: selectedVariant || undefined,
           reasoningEffort: selectedVariant || undefined,
           agent: selectedAgent || undefined,
+          directory: deployDirectory || undefined,
+          taskId: linkedTaskId,
         }),
       });
 
@@ -1079,13 +1694,15 @@ export default function OpenCodeChat({
         );
         setIsGenerating(true);
         if (Array.isArray(data.messages) && data.messages.length > 0) {
-          setMessages(data.messages);
+          setMessages(sortMessagesChronological(data.messages));
+          setTimeout(() => scrollToBottom(), 50);
         }
       } else if (!res.ok || !data.success) {
         throw new Error(data.error || 'Ошибка при отправке сообщения в OpenCode');
       } else {
         if (Array.isArray(data.messages) && data.messages.length > 0) {
-          setMessages(data.messages);
+          setMessages(sortMessagesChronological(data.messages));
+          setTimeout(() => scrollToBottom(), 50);
         } else if (data.textResponse) {
           setMessages((prev) => [
             ...prev,
@@ -1096,6 +1713,7 @@ export default function OpenCodeChat({
               completedAt: Date.now(),
             },
           ]);
+          setTimeout(() => scrollToBottom(), 50);
         }
         if (data.diff) setDiff(data.diff);
         setIsGenerating(false);
@@ -1105,6 +1723,7 @@ export default function OpenCodeChat({
       if (targetSessionId) {
         fetchSessionTodos(targetSessionId);
       }
+      fetchKanbanTasks();
     } catch (err: any) {
       alert(err.message || 'Ошибка отправки сообщения');
       setIsGenerating(false);
@@ -1170,10 +1789,11 @@ export default function OpenCodeChat({
     });
   };
 
-  // Filtered sessions for sidebar
-  const filteredSessions = sessions.filter((s) =>
-    s.title.toLowerCase().includes(sessionSearch.toLowerCase())
-  );
+  // Filtered sessions for sidebar (by title or directory)
+  const filteredSessions = sessions.filter((s) => {
+    const q = sessionSearch.toLowerCase();
+    return s.title.toLowerCase().includes(q) || (s.directory && s.directory.toLowerCase().includes(q));
+  });
 
   // Active session model display
   const activeSessionModelObj = useMemo(() => {
@@ -1182,11 +1802,17 @@ export default function OpenCodeChat({
 
   // Current active step during generation
   const currentRunningStep = useMemo(() => {
+    if (pendingQuestions.length > 0) {
+      return 'Ожидает ответа пользователя на уточняющий вопрос агента...';
+    }
     if (!isGenerating) return null;
     const lastMsg = messages[messages.length - 1];
     if (lastMsg && lastMsg.role === 'assistant' && lastMsg.parts) {
       const runningPart = lastMsg.parts.find((p) => p.state?.status === 'running');
       if (runningPart) {
+        if (runningPart.tool === 'question') {
+          return 'Агент ожидает ответа пользователя на вопрос...';
+        }
         if (runningPart.tool === 'bash') {
           return `Выполняется команда bash: ${runningPart.state?.input?.command || runningPart.state?.title || ''}`;
         }
@@ -1200,7 +1826,7 @@ export default function OpenCodeChat({
       }
     }
     return 'OpenCode анализирует задачу и выполняет операции на сервере...';
-  }, [isGenerating, messages]);
+  }, [isGenerating, messages, pendingQuestions]);
 
   // Count completed todos
   const completedTodosCount = useMemo(() => {
@@ -1231,12 +1857,54 @@ export default function OpenCodeChat({
               {activeSession && (
                 <>
                   <span className="text-slate-600 hidden md:inline">/</span>
-                  <span
-                    className="text-xs font-semibold text-cyan-300 truncate max-w-[200px] hidden md:inline"
-                    title={activeSession.title}
-                  >
-                    {activeSession.title}
-                  </span>
+                  {editingSessionId === activeSession.id ? (
+                    <form
+                      onSubmit={(e) => handleSaveRenameSession(activeSession.id, e)}
+                      className="inline-flex items-center gap-1.5"
+                    >
+                      <input
+                        type="text"
+                        value={editingTitle}
+                        onChange={(e) => setEditingTitle(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Escape') {
+                            e.preventDefault();
+                            handleCancelRenameSession();
+                          }
+                        }}
+                        autoFocus
+                        disabled={isSavingSessionTitle}
+                        className="bg-slate-950 border border-cyan-400 rounded px-2 py-0.5 text-xs text-white placeholder-slate-500 focus:outline-none font-semibold max-w-[240px]"
+                      />
+                      <button
+                        type="submit"
+                        disabled={isSavingSessionTitle || !editingTitle.trim()}
+                        className="p-1 rounded bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-bold transition-colors"
+                        title="Сохранить (Enter)"
+                      >
+                        <Check className="w-3 h-3" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleCancelRenameSession}
+                        disabled={isSavingSessionTitle}
+                        className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs transition-colors"
+                        title="Отмена (Esc)"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </form>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={(e) => handleStartRenameSession(activeSession, e)}
+                      className="group/title inline-flex items-center gap-1.5 text-xs font-semibold text-cyan-300 hover:text-cyan-200 transition-colors truncate max-w-[240px] text-left"
+                      title="Кликните для переименования диалога"
+                    >
+                      <span className="truncate">{activeSession.title}</span>
+                      <Pencil className="w-3 h-3 opacity-0 group-hover/title:opacity-100 transition-opacity text-slate-400 shrink-0" />
+                    </button>
+                  )}
                 </>
               )}
             </div>
@@ -1247,11 +1915,252 @@ export default function OpenCodeChat({
                 <Server className="w-3 h-3 text-cyan-400" />
                 <span className="text-slate-300">{hostInfo?.name || project?.host?.name || 'Сервер'}</span>
               </span>
-              <span>•</span>
-              <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-300">
-                <FolderOpen className="w-3 h-3 text-cyan-400" />
-                <span>{deployDirectory || '/root'}</span>
-              </span>
+              {/* Interactive OpenCode Project / Directory Selector */}
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsProjectSelectorOpen(!isProjectSelectorOpen);
+                    if (!isProjectSelectorOpen) {
+                      fetchOpenCodeProjects(deployDirectory);
+                    }
+                  }}
+                  className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-cyan-500/50 text-slate-300 hover:text-cyan-300 transition-colors cursor-pointer group"
+                  title="Выбрать проект OpenCode или изменить рабочую директорию"
+                >
+                  {currentOpenCodeProject?.icon?.color ? (
+                    <span
+                      className="w-2.5 h-2.5 rounded-full shrink-0 shadow-sm"
+                      style={{ backgroundColor: currentOpenCodeProject.icon.color }}
+                    />
+                  ) : (
+                    <FolderGit2 className="w-3 h-3 text-cyan-400 group-hover:scale-110 transition-transform" />
+                  )}
+                  <span className="font-semibold text-white">
+                    {currentOpenCodeProject?.name || (deployDirectory ? deployDirectory.split(/[/\\]/).filter(Boolean).pop() : 'OpenCode Проект')}
+                  </span>
+                  <span className="text-[10px] text-slate-400 hidden sm:inline font-mono">
+                    ({deployDirectory || '/root'})
+                  </span>
+                  <ChevronDown className="w-3 h-3 text-slate-400 ml-0.5" />
+                </button>
+
+                {/* Dropdown Menu */}
+                {isProjectSelectorOpen && (
+                  <div className="absolute left-0 top-full mt-2 w-84 sm:w-96 p-3 rounded-xl border border-slate-700 bg-slate-950/95 backdrop-blur-xl shadow-2xl z-50 text-xs font-sans space-y-3">
+                    <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                      <div className="flex items-center gap-1.5 font-bold text-white">
+                        <FolderGit2 className="w-4 h-4 text-cyan-400" />
+                        <span>Проекты OpenCode на сервере</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => fetchOpenCodeProjects(deployDirectory)}
+                          disabled={loadingOpenCodeProjects}
+                          className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white transition-colors disabled:opacity-50"
+                          title="Обновить список проектов с сервера OpenCode"
+                        >
+                          <RefreshCw className={`w-3.5 h-3.5 ${loadingOpenCodeProjects ? 'animate-spin text-cyan-400' : ''}`} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setIsProjectSelectorOpen(false)}
+                          className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Current Resolved Project */}
+                    {currentOpenCodeProject && (
+                      <div className="p-2.5 rounded-lg bg-cyan-950/30 border border-cyan-500/30 space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] uppercase font-bold tracking-wider text-cyan-400">
+                            Текущий активный контекст
+                          </span>
+                          <div className="flex items-center gap-2">
+                            {typeof currentOpenCodeProject.vcs === 'object' && currentOpenCodeProject.vcs?.branch && (
+                              <span className="flex items-center gap-1 text-[10px] text-emerald-400 font-mono">
+                                <GitBranch className="w-3 h-3" />
+                                <span>{currentOpenCodeProject.vcs.branch}</span>
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              onClick={(e) => handleOpenEditProject(currentOpenCodeProject, e)}
+                              className="text-slate-400 hover:text-cyan-400 p-0.5 rounded transition-colors"
+                              title="Редактировать проект (имя, цвет)"
+                            >
+                              <Pencil className="w-3 h-3" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => handleConfirmDeleteProject(currentOpenCodeProject, e)}
+                              className="text-slate-400 hover:text-rose-400 p-0.5 rounded transition-colors"
+                              title="Удалить / отвязать проект"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          </div>
+                        </div>
+                        <div className="text-white font-semibold flex items-center gap-2">
+                          {currentOpenCodeProject.icon?.color ? (
+                            <span
+                              className="w-2.5 h-2.5 rounded-full shrink-0"
+                              style={{ backgroundColor: currentOpenCodeProject.icon.color }}
+                            />
+                          ) : (
+                            <FolderOpen className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                          )}
+                          <span className="truncate">{currentOpenCodeProject.name}</span>
+                          {currentOpenCodeProject.sessionsCount !== undefined && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-300 font-mono">
+                              {currentOpenCodeProject.sessionsCount} сессий
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[11px] font-mono text-slate-400 break-all">
+                          {currentOpenCodeProject.worktree || currentOpenCodeProject.path || deployDirectory}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Detected Projects List */}
+                    <div>
+                      <div className="text-[11px] font-semibold text-slate-400 mb-1.5 flex items-center justify-between">
+                        <span>Список проектов сервера (GET /project)</span>
+                        <span className="text-[10px] text-slate-500">{openCodeProjects.length} обнаружено</span>
+                      </div>
+
+                      {loadingOpenCodeProjects ? (
+                        <div className="py-4 text-center text-slate-500 flex items-center justify-center gap-2">
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin text-cyan-400" />
+                          <span>Опрос сервера OpenCode...</span>
+                        </div>
+                      ) : openCodeProjects.length === 0 ? (
+                        <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800 text-slate-400 text-center">
+                          На сервере OpenCode пока нет зарегистрированных проектов в базе. Выберите рабочую директорию вручную ниже.
+                        </div>
+                      ) : (
+                        <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1">
+                          {openCodeProjects.map((p) => {
+                            const pPath = (p as any).canonical || p.worktree || p.path || p.directory || '';
+                            const isSelected = (deployDirectory || '').toLowerCase().replace(/\\/g, '/').replace(/\/+$/, '') === pPath.toLowerCase().replace(/\\/g, '/').replace(/\/+$/, '');
+                            const vcsLabel = typeof p.vcs === 'string' ? p.vcs : p.vcs?.branch || (p.vcs ? 'git' : null);
+                            return (
+                              <div
+                                key={p.id || pPath}
+                                className={`w-full text-left p-2 rounded-lg border transition-all flex items-start justify-between gap-2 ${
+                                  isSelected
+                                    ? 'bg-cyan-500/10 border-cyan-500/50 text-white shadow-sm'
+                                    : 'bg-slate-900/80 hover:bg-slate-800/90 border-slate-800 text-slate-300'
+                                }`}
+                              >
+                                <div
+                                  className="min-w-0 flex-1 cursor-pointer"
+                                  onClick={() => handleSelectOpenCodeProject(pPath, true)}
+                                >
+                                  <div className="font-semibold text-white flex items-center gap-1.5 truncate">
+                                    {p.icon?.color ? (
+                                      <span
+                                        className="w-2.5 h-2.5 rounded-full shrink-0 shadow-sm"
+                                        style={{ backgroundColor: p.icon.color }}
+                                      />
+                                    ) : (
+                                      <FolderOpen className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                                    )}
+                                    <span className="truncate">{p.name || p.id}</span>
+                                    {vcsLabel && (
+                                      <span className="text-[9px] px-1.5 py-0.2 rounded bg-emerald-950/60 text-emerald-300 font-mono shrink-0">
+                                        {vcsLabel}
+                                      </span>
+                                    )}
+                                    {p.sessionsCount !== undefined && p.sessionsCount > 0 && (
+                                      <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-800 text-cyan-400 font-mono shrink-0">
+                                        {p.sessionsCount} сессий
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="text-[10px] font-mono text-slate-400 truncate mt-0.5">
+                                    {pPath}
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-1 shrink-0 mt-0.5">
+                                  <button
+                                    type="button"
+                                    onClick={(e) => handleOpenEditProject(p, e)}
+                                    className="p-1 text-slate-400 hover:text-cyan-400 rounded hover:bg-slate-800 transition-colors"
+                                    title="Настройки проекта"
+                                  >
+                                    <Pencil className="w-3 h-3" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => handleConfirmDeleteProject(p, e)}
+                                    className="p-1 text-slate-400 hover:text-rose-400 rounded hover:bg-slate-800 transition-colors"
+                                    title="Удалить проект из OpenCode"
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                  </button>
+                                  {isSelected ? (
+                                    <span className="p-1 text-cyan-400">
+                                      <Check className="w-3.5 h-3.5" />
+                                    </span>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleSelectOpenCodeProject(pPath, true)}
+                                      className="text-[10px] px-2 py-0.5 rounded bg-slate-800 hover:bg-cyan-600 hover:text-white text-slate-400 transition-colors"
+                                    >
+                                      Выбрать
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Server File Tree Picker & Manual Directory Input */}
+                    <div className="pt-2 border-t border-slate-800 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-semibold text-slate-400">
+                          Открыть папку на сервере:
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenDirPicker(deployDirectory || '/opt')}
+                          className="flex items-center gap-1 text-[11px] text-cyan-400 hover:text-cyan-300 transition-colors cursor-pointer font-medium"
+                        >
+                          <FolderTree className="w-3 h-3" />
+                          <span>Обзор папок на сервере</span>
+                        </button>
+                      </div>
+                      <div className="flex gap-1.5">
+                        <input
+                          type="text"
+                          value={customDirInput}
+                          onChange={(e) => setCustomDirInput(e.target.value)}
+                          placeholder="/opt/TaxiDisp или C:\projects\app"
+                          className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 font-mono"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleSelectOpenCodeProject(customDirInput, true)}
+                          disabled={savingDir || !customDirInput.trim()}
+                          className="px-3 py-1.5 bg-cyan-500 hover:bg-cyan-400 text-slate-950 rounded-lg text-xs font-bold transition-all disabled:opacity-50 shrink-0"
+                        >
+                          {savingDir ? 'Сохранение...' : 'Выбрать'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
               {vcsInfo?.branch && (
                 <>
                   <span>•</span>
@@ -1404,6 +2313,20 @@ export default function OpenCodeChat({
               className={`w-3.5 h-3.5 ${loadingMessages || loadingSessions ? 'animate-spin' : ''}`}
             />
           </button>
+
+          {/* Direct link to OpenCode official Web UI */}
+          {opencodeWebUrl && (
+            <a
+              href={opencodeWebUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 border border-indigo-500/30 transition-all flex items-center gap-1.5 shadow-sm hover:scale-[1.02]"
+              title={`Открыть оригинальный веб-интерфейс OpenCode (${opencodeWebUrl})`}
+            >
+              <ExternalLink className="w-3.5 h-3.5 text-indigo-400" />
+              <span className="hidden sm:inline">Web UI</span>
+            </a>
+          )}
         </div>
       </div>
 
@@ -1434,6 +2357,54 @@ export default function OpenCodeChat({
                 className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-8 pr-3 py-1.5 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-cyan-500 transition-colors"
               />
             </div>
+
+            {/* Scope Toggle: Current Project vs All Host Sessions */}
+            <div className="mt-2.5 flex items-center p-0.5 bg-slate-950/80 border border-slate-800/80 rounded-lg text-[11px]">
+              <button
+                type="button"
+                onClick={() => {
+                  if (!filterOnlyCurrentProject) {
+                    setFilterOnlyCurrentProject(true);
+                    fetchSessions(undefined, deployDirectory, false);
+                  }
+                }}
+                className={`flex-1 py-1 px-1.5 rounded-md font-medium text-center transition-all flex items-center justify-center gap-1 ${
+                  filterOnlyCurrentProject
+                    ? 'bg-cyan-500/20 text-cyan-300 font-semibold shadow-sm border border-cyan-500/30'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/50 border border-transparent'
+                }`}
+                title="Показывать только сессии этого проекта и рабочей директории"
+              >
+                <span>Этот проект</span>
+                {projectSessionsCount !== null && (
+                  <span className="text-[10px] px-1 rounded bg-cyan-950/80 text-cyan-300 font-mono">
+                    {projectSessionsCount}
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (filterOnlyCurrentProject) {
+                    setFilterOnlyCurrentProject(false);
+                    fetchSessions(undefined, deployDirectory, true);
+                  }
+                }}
+                className={`flex-1 py-1 px-1.5 rounded-md font-medium text-center transition-all flex items-center justify-center gap-1 ${
+                  !filterOnlyCurrentProject
+                    ? 'bg-indigo-500/20 text-indigo-300 font-semibold shadow-sm border border-indigo-500/30'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/50 border border-transparent'
+                }`}
+                title="Показать все сессии OpenCode со всех проектов на хосте"
+              >
+                <span>Все сессии</span>
+                {totalHostSessionsCount !== null && (
+                  <span className="text-[10px] px-1 rounded bg-slate-800 text-slate-400 font-mono">
+                    {totalHostSessionsCount}
+                  </span>
+                )}
+              </button>
+            </div>
           </div>
 
           {/* Sessions List */}
@@ -1444,10 +2415,29 @@ export default function OpenCodeChat({
                 Загрузка сессий...
               </div>
             ) : filteredSessions.length === 0 ? (
-              <div className="text-center py-8 px-4 text-xs text-slate-500">
-                {sessionSearch
-                  ? 'Сессии не найдены'
-                  : 'Нет созданных диалогов. Нажмите «Новый диалог» выше.'}
+              <div className="text-center py-8 px-4 text-xs text-slate-500 space-y-2">
+                {sessionSearch ? (
+                  <p>Сессии не найдены по запросу «{sessionSearch}»</p>
+                ) : filterOnlyCurrentProject && totalHostSessionsCount && totalHostSessionsCount > 0 ? (
+                  <>
+                    <p className="text-slate-400 font-medium">Нет сессий для этой рабочей папки</p>
+                    <p className="text-[11px] text-slate-500">
+                      На сервере есть {totalHostSessionsCount} сессий других проектов.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFilterOnlyCurrentProject(false);
+                        fetchSessions(undefined, deployDirectory, true);
+                      }}
+                      className="mt-1 px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-slate-700 text-[11px] transition-colors"
+                    >
+                      Показать все ({totalHostSessionsCount})
+                    </button>
+                  </>
+                ) : (
+                  <p>Нет созданных диалогов. Нажмите «Новый диалог» выше.</p>
+                )}
               </div>
             ) : (
               filteredSessions.map((session) => {
@@ -1523,6 +2513,7 @@ export default function OpenCodeChat({
                   <div
                     key={session.id}
                     onClick={() => setActiveSessionId(session.id)}
+                    onDoubleClick={(e) => handleStartRenameSession(session, e)}
                     className={`group relative w-full p-2.5 rounded-xl text-xs text-left transition-all cursor-pointer border ${
                       isActive
                         ? 'bg-cyan-500/10 border-cyan-500/40 text-white font-medium shadow-md'
@@ -1540,12 +2531,12 @@ export default function OpenCodeChat({
                       </div>
 
                       {/* Action buttons (Rename & Delete) */}
-                      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                      <div className="flex items-center gap-0.5 opacity-60 group-hover:opacity-100 transition-opacity shrink-0">
                         <button
                           type="button"
                           onClick={(e) => handleStartRenameSession(session, e)}
                           className="p-1 rounded text-slate-400 hover:text-cyan-400 hover:bg-slate-800 transition-colors"
-                          title="Переименовать"
+                          title="Переименовать диалог"
                         >
                           <Pencil className="w-3 h-3" />
                         </button>
@@ -1573,6 +2564,21 @@ export default function OpenCodeChat({
                         </span>
                       ) : null}
                     </div>
+
+                    {/* Directory Badge when viewing all sessions or for sessions outside active directory */}
+                    {session.directory && (!filterOnlyCurrentProject || !session.isCurrentProject) && (
+                      <div className="mt-1.5 flex items-center gap-1 text-[9.5px] text-slate-400 font-mono bg-slate-950/70 px-1.5 py-0.5 rounded border border-slate-800/80">
+                        <Folder className="w-2.5 h-2.5 text-slate-500 shrink-0" />
+                        <span className="truncate" title={session.directory}>
+                          {session.directory.split(/[/\\]/).filter(Boolean).slice(-2).join('/') || session.directory}
+                        </span>
+                        {session.isCurrentProject ? (
+                          <span className="ml-auto text-[8.5px] text-cyan-400 bg-cyan-950/80 border border-cyan-800/60 px-1 rounded shrink-0">
+                            этот проект
+                          </span>
+                        ) : null}
+                      </div>
+                    )}
                   </div>
                 );
               })
@@ -1858,31 +2864,61 @@ export default function OpenCodeChat({
               })
             )}
 
-            {/* Active Execution Banner during generation */}
-            {isGenerating && (
+            {/* Active Execution Banner during generation or when agent asks a question */}
+            {(isGenerating || pendingQuestions.length > 0) && (
               <div className="flex items-start gap-3">
-                <div className="w-8 h-8 rounded-xl bg-slate-900 border border-cyan-500/40 text-cyan-400 flex items-center justify-center shrink-0">
-                  <RefreshCw className="w-4 h-4 animate-spin text-cyan-400" />
+                <div
+                  className={`w-8 h-8 rounded-xl bg-slate-900 border text-center flex items-center justify-center shrink-0 ${
+                    pendingQuestions.length > 0
+                      ? 'border-amber-500/40 text-amber-400'
+                      : 'border-cyan-500/40 text-cyan-400'
+                  }`}
+                >
+                  {pendingQuestions.length > 0 ? (
+                    <HelpCircle className="w-4 h-4 text-amber-400 animate-pulse" />
+                  ) : (
+                    <RefreshCw className="w-4 h-4 animate-spin text-cyan-400" />
+                  )}
                 </div>
-                <div className="flex-1 max-w-[85%] bg-slate-900/90 border border-cyan-500/30 rounded-2xl rounded-tl-sm p-3.5 shadow-lg flex items-center justify-between gap-3">
+                <div
+                  className={`flex-1 max-w-[85%] bg-slate-900/90 border rounded-2xl rounded-tl-sm p-3.5 shadow-lg flex items-center justify-between gap-3 ${
+                    pendingQuestions.length > 0
+                      ? 'border-amber-500/30'
+                      : 'border-cyan-500/30'
+                  }`}
+                >
                   <div className="flex items-center gap-2.5">
                     <span className="relative flex h-2.5 w-2.5">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
-                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-cyan-500"></span>
+                      <span
+                        className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
+                          pendingQuestions.length > 0 ? 'bg-amber-400' : 'bg-cyan-400'
+                        }`}
+                      ></span>
+                      <span
+                        className={`relative inline-flex rounded-full h-2.5 w-2.5 ${
+                          pendingQuestions.length > 0 ? 'bg-amber-500' : 'bg-cyan-500'
+                        }`}
+                      ></span>
                     </span>
-                    <span className="text-xs text-cyan-300 font-medium">
+                    <span
+                      className={`text-xs font-medium ${
+                        pendingQuestions.length > 0 ? 'text-amber-300' : 'text-cyan-300'
+                      }`}
+                    >
                       {currentRunningStep}
                     </span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={handleAbortGeneration}
-                    className="px-2.5 py-1 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors shrink-0"
-                    title="Прервать выполнение задачи"
-                  >
-                    <StopCircle className="w-3.5 h-3.5 text-rose-400" />
-                    <span>Прервать</span>
-                  </button>
+                  {isGenerating && (
+                    <button
+                      type="button"
+                      onClick={handleAbortGeneration}
+                      className="px-2.5 py-1 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors shrink-0"
+                      title="Прервать выполнение задачи"
+                    >
+                      <StopCircle className="w-3.5 h-3.5 text-rose-400" />
+                      <span>Прервать</span>
+                    </button>
+                  )}
                 </div>
               </div>
             )}
@@ -1904,6 +2940,111 @@ export default function OpenCodeChat({
 
           {/* Bottom Chat Input Form */}
           <div className="p-3.5 border-t border-slate-800/80 bg-[#090d18]">
+            {/* Interactive OpenCode Pending Question(s) Box */}
+            {pendingQuestions.length > 0 && (
+              <div className="mb-3.5 p-4 rounded-xl border border-amber-500/50 bg-gradient-to-b from-amber-950/40 to-slate-950/90 shadow-2xl space-y-3.5">
+                <div className="flex items-center justify-between border-b border-amber-500/20 pb-2.5">
+                  <div className="flex items-center gap-2 text-amber-300 font-bold text-xs">
+                    <HelpCircle className="w-4 h-4 text-amber-400 shrink-0 animate-bounce" />
+                    <span>Уточняющий вопрос от OpenCode Agent ({pendingQuestions.length})</span>
+                  </div>
+                  <span className="text-[10px] text-amber-400/90 bg-amber-500/10 px-2.5 py-0.5 rounded border border-amber-500/25 font-mono">
+                    Выберите вариант для продолжения работы
+                  </span>
+                </div>
+
+                {pendingQuestions.map((qGroup) => (
+                  <div key={qGroup.id} className="space-y-3.5">
+                    {qGroup.questions.map((q, qIdx) => {
+                      const selectedForThisQ = selectedAnswers[qGroup.id]?.[qIdx] || [];
+                      const isMulti = Boolean(q.multiple);
+
+                      return (
+                        <div key={qIdx} className="space-y-2">
+                          <div className="text-xs text-white">
+                            {q.header && (
+                              <span className="font-bold text-amber-300 mr-2 bg-amber-950/60 px-2 py-0.5 rounded border border-amber-500/30">
+                                {q.header}
+                              </span>
+                            )}
+                            <span className="font-semibold text-slate-100">{q.question}</span>
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+                            {(q.options || []).map((opt) => {
+                              const isSelected = selectedForThisQ.includes(opt.label);
+                              const isRec =
+                                opt.label.toLowerCase().includes('recommended') ||
+                                opt.label.toLowerCase().includes('рекомендован');
+
+                              return (
+                                <button
+                                  key={opt.label}
+                                  type="button"
+                                  onClick={() => handleSelectOption(qGroup.id, qIdx, opt.label, isMulti)}
+                                  className={`p-3 rounded-xl border text-left text-xs transition-all flex flex-col justify-between cursor-pointer ${
+                                    isSelected
+                                      ? 'border-amber-400 bg-amber-500/20 text-white shadow-lg shadow-amber-500/10 ring-1 ring-amber-400/30'
+                                      : 'border-slate-800 bg-slate-900/70 hover:bg-slate-850 hover:border-slate-700 text-slate-300'
+                                  }`}
+                                >
+                                  <div className="flex items-start justify-between gap-2 w-full">
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      <span
+                                        className={`font-semibold ${
+                                          isSelected ? 'text-amber-300' : 'text-slate-100'
+                                        }`}
+                                      >
+                                        {opt.label}
+                                      </span>
+                                    </div>
+                                    {isSelected ? (
+                                      <CheckCircle2 className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                                    ) : (
+                                      <Circle className="w-4 h-4 text-slate-600 shrink-0 mt-0.5" />
+                                    )}
+                                  </div>
+                                  {opt.description && (
+                                    <p className="mt-2 text-[11px] text-slate-400 leading-relaxed font-sans">
+                                      {opt.description}
+                                    </p>
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-800/80">
+                      <button
+                        type="button"
+                        onClick={() => handleRejectQuestion(qGroup.id)}
+                        disabled={isSubmittingAnswer}
+                        className="px-3.5 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800 text-slate-400 hover:text-slate-200 text-xs font-medium transition-colors"
+                      >
+                        Отклонить / Пропустить
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleReplyQuestion(qGroup.id)}
+                        disabled={isSubmittingAnswer}
+                        className="px-5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold transition-all shadow-md shadow-amber-500/20 flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      >
+                        {isSubmittingAnswer ? (
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <Check className="w-3.5 h-3.5" />
+                        )}
+                        <span>Отправить ответ агенту</span>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
             {/* Quick Controls Bar: Agent, Kanban tasks, Model, Reasoning */}
             <div className="flex items-center gap-2 mb-2 flex-wrap text-xs">
               {/* Agent Mode Selector (Build, Plan, Explore) */}
@@ -1939,6 +3080,9 @@ export default function OpenCodeChat({
                             `Пожалуйста, проанализируй файлы в рабочей директории ${deployDirectory || ''} и реши эту задачу.`
                         );
                         textareaRef.current?.focus({ preventScroll: true });
+                        if (task.column === 'todo' || task.column === 'backlog') {
+                          handleUpdateTaskColumn(task.id, 'in_progress');
+                        }
                       }
                     }}
                     className="bg-slate-950 border border-slate-800 text-slate-300 rounded-lg px-2.5 py-1 text-xs focus:outline-none focus:border-cyan-500 font-sans max-w-[200px] truncate"
@@ -2036,6 +3180,43 @@ export default function OpenCodeChat({
                 );
               })()}
             </div>
+
+            {/* Active Linked Task Pill */}
+            {selectedTaskId && (() => {
+              const activeTask = kanbanTasks.find((t: any) => t.id === selectedTaskId);
+              if (!activeTask) return null;
+              return (
+                <div className="mb-2 p-2 px-3 rounded-xl bg-cyan-950/40 border border-cyan-500/40 flex items-center justify-between gap-2 text-xs">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse shrink-0" />
+                    <span className="text-cyan-300 font-medium truncate">
+                      Привязана задача Kanban: <strong className="text-white">{activeTask.title}</strong>
+                    </span>
+                    <span className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-700 text-[10px] font-mono text-cyan-300 shrink-0">
+                      {activeTask.column === 'in_progress' ? 'В работе' : activeTask.column}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => handleUpdateTaskColumn(activeTask.id, 'done')}
+                      className="px-2 py-0.5 rounded bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 text-[10px] font-semibold transition-colors"
+                      title="Отметить выполненной в Kanban"
+                    >
+                      ✓ Завершить
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedTaskId('')}
+                      className="p-1 text-slate-400 hover:text-rose-400 rounded transition-colors text-[10px]"
+                      title="Отвязать задачу от текущего промпта"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Main Textarea and Send Button */}
             <form onSubmit={handleSendMessage} className="relative flex items-end gap-2">
@@ -2422,6 +3603,61 @@ export default function OpenCodeChat({
         </div>
       )}
 
+      {/* Delete Project Confirmation Modal */}
+      {projectToDelete && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#0f172a] border border-slate-800 rounded-2xl max-w-md w-full p-5 shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h3 className="text-sm font-bold text-white">Удалить проект OpenCode?</h3>
+                <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+                  Вы уверены, что хотите удалить проект{' '}
+                  <span className="font-semibold text-white">«{projectToDelete.name}»</span>?
+                </p>
+                <div className="p-2 rounded-lg bg-slate-950 border border-slate-800 font-mono text-[11px] text-slate-400 break-all mt-2 select-all">
+                  {projectToDelete.worktree}
+                </div>
+                <p className="text-[11px] text-rose-400/90 mt-2.5 bg-rose-950/30 border border-rose-900/30 rounded-lg p-2.5 leading-relaxed">
+                  Проект будет удален из реестра OpenCode на сервере и отвязан от Visor. Исходные файлы проекта в файловой системе останутся сохранены.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 mt-5 pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setProjectToDelete(null)}
+                disabled={isDeletingProject}
+                className="px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 transition-colors"
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                onClick={handleExecuteDeleteProject}
+                disabled={isDeletingProject}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-500 transition-colors flex items-center gap-1.5 shadow-lg shadow-rose-600/20 disabled:opacity-50"
+              >
+                {isDeletingProject ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Удаление...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Удалить проект</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* File Content Preview Modal */}
       {selectedFileContent && (
         <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
@@ -2465,6 +3701,256 @@ export default function OpenCodeChat({
               >
                 Закрыть
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Server Directory Browser Modal (DialogSelectDirectory) */}
+      {isDirPickerOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#090d18] border border-slate-700 rounded-2xl max-w-lg w-full p-5 shadow-2xl flex flex-col max-h-[85vh] animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <FolderTree className="w-5 h-5 text-cyan-400" />
+                <h3 className="text-sm font-bold text-white">Выбрать папку на сервере</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsDirPickerOpen(false)}
+                className="text-slate-400 hover:text-white p-1"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Quick shortcuts & Current path */}
+            <div className="mt-3 space-y-2">
+              <div className="flex items-center gap-1.5 overflow-x-auto text-[11px] pb-1">
+                <span className="text-slate-500 shrink-0">Быстрый переход:</span>
+                {['/opt', '/home', '/var', '/root'].map((qp) => (
+                  <button
+                    key={qp}
+                    type="button"
+                    onClick={() => handleDirPickerNavigate(qp)}
+                    className="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-cyan-400 font-mono border border-slate-800 shrink-0 transition-colors"
+                  >
+                    {qp}
+                  </button>
+                ))}
+              </div>
+
+              {/* Path Bar + Up Button */}
+              <div className="flex items-center gap-1.5 bg-slate-950 p-2 rounded-xl border border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const parts = dirPickerPath.replace(/\/+$/, '').split('/');
+                    parts.pop();
+                    const parent = parts.join('/') || '/';
+                    handleDirPickerNavigate(parent);
+                  }}
+                  disabled={dirPickerPath === '/' || dirPickerPath === ''}
+                  className="px-2 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-slate-300 rounded text-xs font-mono transition-colors"
+                  title="На уровень выше (..)"
+                >
+                  ..
+                </button>
+                <div className="flex-1 font-mono text-xs text-white truncate px-1">
+                  {dirPickerPath || '/'}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => fetchDirPickerItems(dirPickerPath)}
+                  className="p-1 text-slate-400 hover:text-cyan-400"
+                  title="Обновить"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${loadingDirPicker ? 'animate-spin' : ''}`} />
+                </button>
+              </div>
+            </div>
+
+            {/* Directory items list */}
+            <div className="flex-1 overflow-y-auto my-3 border border-slate-800/80 rounded-xl bg-slate-950/70 p-2 space-y-1 min-h-[200px] max-h-72">
+              {loadingDirPicker ? (
+                <div className="py-12 text-center text-xs text-slate-500 flex flex-col items-center gap-2">
+                  <RefreshCw className="w-5 h-5 animate-spin text-cyan-400" />
+                  <span>Чтение файловой системы...</span>
+                </div>
+              ) : dirPickerItems.length === 0 ? (
+                <div className="py-12 text-center text-xs text-slate-500">
+                  В этой папке нет подпапок или файлов
+                </div>
+              ) : (
+                dirPickerItems
+                  .filter((item) => item.type === 'directory')
+                  .map((item, idx) => {
+                    const cleanBase = dirPickerPath.replace(/\/+$/, '');
+                    const fullChildPath = `${cleanBase}/${item.name}`;
+                    return (
+                      <div
+                        key={idx}
+                        onClick={() => handleDirPickerNavigate(fullChildPath)}
+                        className="p-2 rounded-lg bg-slate-900/60 hover:bg-slate-800/90 text-xs flex items-center justify-between cursor-pointer border border-slate-800/60 transition-colors group"
+                      >
+                        <div className="flex items-center gap-2 truncate">
+                          <Folder className="w-4 h-4 text-cyan-400 shrink-0 group-hover:scale-110 transition-transform" />
+                          <span className="font-medium text-slate-200 truncate">{item.name}</span>
+                        </div>
+                        <span className="text-[10px] text-slate-500 opacity-0 group-hover:opacity-100 font-mono transition-opacity">
+                          открыть →
+                        </span>
+                      </div>
+                    );
+                  })
+              )}
+            </div>
+
+            {/* Modal actions */}
+            <div className="flex items-center justify-between pt-3 border-t border-slate-800 text-xs">
+              <span className="text-slate-400 text-[11px] truncate max-w-[200px] font-mono">
+                {dirPickerPath}
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsDirPickerOpen(false)}
+                  className="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold transition-colors"
+                >
+                  Отмена
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDirPickerSelect(dirPickerPath)}
+                  className="px-4 py-1.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold transition-colors flex items-center gap-1.5 shadow-lg shadow-cyan-500/20"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  <span>Выбрать эту папку</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Project Modal (DialogEditProject) */}
+      {isEditProjectModalOpen && editingProject && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#0b101e] border border-slate-700 rounded-2xl max-w-md w-full p-5 shadow-2xl flex flex-col space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <FolderGit2 className="w-5 h-5 text-cyan-400" />
+                <h3 className="text-sm font-bold text-white">Настройки проекта OpenCode</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsEditProjectModalOpen(false)}
+                className="text-slate-400 hover:text-white p-1"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="block text-slate-400 font-semibold mb-1">
+                  Название проекта
+                </label>
+                <input
+                  type="text"
+                  value={editingProject.name}
+                  onChange={(e) => setEditingProject({ ...editingProject, name: e.target.value })}
+                  placeholder="TaxiDisp"
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 font-medium"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-400 font-semibold mb-1">
+                  Цвет значка
+                </label>
+                <div className="flex items-center gap-2">
+                  {[
+                    { name: 'cyan', color: '#06b6d4' },
+                    { name: 'pink', color: '#ec4899' },
+                    { name: 'emerald', color: '#10b981' },
+                    { name: 'amber', color: '#f59e0b' },
+                    { name: 'purple', color: '#a855f7' },
+                    { name: 'blue', color: '#3b82f6' },
+                    { name: 'rose', color: '#f43f5e' },
+                  ].map((preset) => {
+                    const isPicked = editingProject.color === preset.name || editingProject.color === preset.color;
+                    return (
+                      <button
+                        key={preset.name}
+                        type="button"
+                        onClick={() => setEditingProject({ ...editingProject, color: preset.name })}
+                        className={`w-7 h-7 rounded-full flex items-center justify-center transition-transform ${
+                          isPicked ? 'ring-2 ring-white scale-110' : 'hover:scale-105'
+                        }`}
+                        style={{ backgroundColor: preset.color }}
+                        title={preset.name}
+                      >
+                        {isPicked && <Check className="w-3.5 h-3.5 text-white" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-slate-400 font-semibold mb-1">
+                  Рабочая директория на сервере
+                </label>
+                <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 text-[11px] font-mono text-slate-300 break-all select-all">
+                  {editingProject.worktree}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-2 pt-3 border-t border-slate-800 text-xs">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsEditProjectModalOpen(false);
+                  handleConfirmDeleteProject(editingProject);
+                }}
+                disabled={savingProjectEdit}
+                className="px-3 py-1.5 rounded-xl text-rose-400 hover:text-white hover:bg-rose-500/20 font-semibold transition-colors flex items-center gap-1.5"
+                title="Удалить проект из OpenCode"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Удалить проект</span>
+              </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsEditProjectModalOpen(false)}
+                  disabled={savingProjectEdit}
+                  className="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold transition-colors"
+                >
+                  Отмена
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveProjectEdit}
+                  disabled={savingProjectEdit || !editingProject.name.trim()}
+                  className="px-4 py-1.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold transition-colors flex items-center gap-1.5 shadow-lg shadow-cyan-500/20 disabled:opacity-50"
+                >
+                  {savingProjectEdit ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Сохранение...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Сохранить</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         </div>
