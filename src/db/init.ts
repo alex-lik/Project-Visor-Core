@@ -110,6 +110,16 @@ export async function ensureDatabaseInitialized() {
         created_at INTEGER NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS custom_relation_types (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        key TEXT NOT NULL,
+        label TEXT NOT NULL,
+        color TEXT NOT NULL DEFAULT '#94a3b8',
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_custom_relation_types_user ON custom_relation_types(user_id);
+
       CREATE TABLE IF NOT EXISTS kanban_tasks (
         id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

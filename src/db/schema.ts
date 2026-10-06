@@ -97,8 +97,20 @@ export const projectRelations = sqliteTable('project_relations', {
   id: text('id').primaryKey(),
   sourceProjectId: text('source_project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
   targetProjectId: text('target_project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
-  relationType: text('relation_type').notNull().default('depends_on'), // 'depends_on' | 'api_calls' | 'database_shared' | 'webhook_events' | 'auth_provider' | 'submodule'
+  relationType: text('relation_type').notNull().default('depends_on'), // built-in types + custom keys (custom_relation_types.key)
   description: text('description'),
+  createdAt: integer('created_at').notNull(),
+});
+
+// Пользовательские типы связей: каждый пользователь может создавать свои типы
+// поверх встроенных (RELATION_LABELS). userId без FK — владельцем может быть
+// как пользователь, так и API-ключ (псевдо-владелец 'apikey:<id>').
+export const customRelationTypes = sqliteTable('custom_relation_types', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull(),
+  key: text('key').notNull(),
+  label: text('label').notNull(),
+  color: text('color').notNull().default('#94a3b8'),
   createdAt: integer('created_at').notNull(),
 });
 

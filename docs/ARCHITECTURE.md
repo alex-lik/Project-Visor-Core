@@ -110,8 +110,11 @@ erDiagram
 6. **`relations`**:
    - `id` (PK, text)
    - `source_id` (FK -> projects.id), `target_id` (FK -> projects.id)
-   - `relation_type` (`depends_on | api_calls | database_shared | webhook_events | auth_provider | submodule`)
-   - `label`, `port`
+    - `relation_type` (встроенные + ключи из `custom_relation_types`)
+    - `label`, `port`
+6b. **`custom_relation_types`** (пользовательские типы связей):
+    - `id` (PK, text), `user_id` (владелец: user id или `apikey:<id>`)
+    - `key` (уникален в пределах владельца, `custom_*`), `label`, `color` (HEX)
 7. **`api_keys`**:
    - `id` (PK, text), `user_id` (FK -> users.id)
    - `key_hash` (SHA-256), `key_prefix` (e.g. `pv_live_1234`)

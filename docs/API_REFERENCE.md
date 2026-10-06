@@ -219,8 +219,33 @@ Define a relationship edge between two projects.
   }
   ```
 
+### `PATCH /api/relations`
+Update a relationship edge (type, description, endpoints).
+- **Request**:
+  ```json
+  {
+    "id": "rel_xxxxxxxxxx",
+    "sourceProjectId": "proj_frontend",
+    "targetProjectId": "proj_backend",
+    "relationType": "api_calls",
+    "description": "Бот передает лиды через POST /api/leads"
+  }
+  ```
+
 ### `DELETE /api/relations?id={id}`
-Delete relationship edge.
+Delete relationship edge. Returns 404 if the edge does not exist, 403 without access to both projects.
+
+### `GET /api/relations/types`
+List the current user's custom relation types (built-ins live on the client).
+
+### `POST /api/relations/types`
+Create a custom relation type: `{ "label": "...", "color": "#RRGGBB" }`.
+
+### `PATCH /api/relations/types`
+Rename/recolor a custom type: `{ "id": "crt_...", "label"?, "color"? }`.
+
+### `DELETE /api/relations/types?id={id}`
+Delete a custom type. Returns 409 with `usageCount` if relations still use it.
 
 ---
 

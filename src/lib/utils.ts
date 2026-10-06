@@ -25,6 +25,13 @@ export function formatDateTime(timestamp?: number | null): string {
 }
 
 export const STATUS_COLORS: Record<string, { bg: string; text: string; border: string; dot: string; label: string }> = {
+  active: {
+    bg: 'bg-emerald-500/10',
+    text: 'text-emerald-400',
+    border: 'border-emerald-500/30',
+    dot: 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]',
+    label: 'Активен',
+  },
   idea: {
     bg: 'bg-purple-500/10',
     text: 'text-purple-400',
@@ -119,7 +126,40 @@ export const RELATION_LABELS: Record<string, { label: string; color: string }> =
   webhook_events: { label: 'Отправляет вебхуки', color: '#10b981' },
   auth_provider: { label: 'Провайдер авторизации', color: '#ec4899' },
   submodule: { label: 'Подмодуль / библиотека', color: '#64748b' },
+  promotes_to_staging: { label: 'Промотируется в Staging', color: '#60a5fa' },
+  promotes_to_production: { label: 'Промотируется в Production', color: '#34d399' },
+  env_pair: { label: 'Окружения одного сервиса (dev ↔ prod)', color: '#fb923c' },
 };
+
+export interface CustomRelationTypeOption {
+  id: string;
+  key: string;
+  label: string;
+  color: string;
+}
+
+/** Объединяет встроенные подписи типов связей с пользовательскими. */
+export function mergeRelationLabels(
+  custom: CustomRelationTypeOption[]
+): Record<string, { label: string; color: string }> {
+  const merged: Record<string, { label: string; color: string }> = { ...RELATION_LABELS };
+  for (const t of custom || []) {
+    if (t && t.key) merged[t.key] = { label: t.label || t.key, color: t.color || '#94a3b8' };
+  }
+  return merged;
+}
+
+/** Загружает пользовательские типы связей текущего пользователя. */
+export async function fetchCustomRelationTypes(): Promise<CustomRelationTypeOption[]> {
+  try {
+    const res = await fetch('/api/relations/types');
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data.types) ? data.types : [];
+  } catch {
+    return [];
+  }
+}
 
 export const SECRETS_TYPE_LABELS: Record<string, { label: string; badge: string; icon: string; description: string; placeholder: string }> = {
   dotenv: {
