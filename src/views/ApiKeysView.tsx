@@ -28,9 +28,14 @@ interface ApiKeyItem {
   keyPrefix: string;
   roleScope: string;
   allowedProjectNames: string[];
+  allowedHostNames?: string[];
   canWriteKanban: boolean;
   canUpdateStatus: boolean;
   canViewInfra: boolean;
+  canManageProjects?: boolean;
+  canCreateProjects?: boolean;
+  canEditProjects?: boolean;
+  canDeleteProjects?: boolean;
   createdAt: number;
   lastUsedAt?: number;
 }
@@ -313,7 +318,11 @@ export default function ApiKeysView({ mcpExtensionSlot }: ApiKeysViewProps) {
                       {/* Scopes & Permissions */}
                       <div className="flex flex-wrap items-center gap-1.5 mt-3">
                         <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-300">
-                          {k.roleScope === 'all_projects' ? 'Все проекты' : 'Ограниченный доступ'}
+                          {k.roleScope === 'all_projects'
+                            ? 'Все проекты'
+                            : k.roleScope === 'scoped_hosts'
+                              ? 'По серверам'
+                              : 'Ограниченный доступ'}
                         </span>
                         {k.canWriteKanban && (
                           <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950/60 text-emerald-400 border border-emerald-800/40">
@@ -330,11 +339,31 @@ export default function ApiKeysView({ mcpExtensionSlot }: ApiKeysViewProps) {
                             Инфраструктура
                           </span>
                         )}
+                        {(k.canCreateProjects || k.canManageProjects) && (
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950/60 text-emerald-300 border border-emerald-800/40">
+                            ➕ Создание
+                          </span>
+                        )}
+                        {(k.canEditProjects || k.canManageProjects) && (
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-950/60 text-amber-300 border border-amber-800/40">
+                            ✏️ Редактирование
+                          </span>
+                        )}
+                        {k.canDeleteProjects && (
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-rose-950/60 text-rose-300 border border-rose-800/40">
+                            🗑️ Удаление
+                          </span>
+                        )}
                       </div>
 
                       {k.roleScope === 'scoped_projects' && k.allowedProjectNames && k.allowedProjectNames.length > 0 && (
                         <div className="text-[11px] text-slate-400 mt-2 font-mono">
                           Проекты: {k.allowedProjectNames.join(', ')}
+                        </div>
+                      )}
+                      {(k.roleScope === 'scoped_hosts') && k.allowedHostNames && k.allowedHostNames.length > 0 && (
+                        <div className="text-[11px] text-slate-400 mt-2 font-mono">
+                          Серверы: {k.allowedHostNames.join(', ')}
                         </div>
                       )}
                     </div>
