@@ -25,6 +25,7 @@ export interface NavItemConfig {
 }
 
 const DEFAULT_CORE_NAV_ITEMS: NavItemConfig[] = [
+  // Первый пункт — «Радар фокуса», его href подменяется через проп homeHref
   { href: '/', label: 'Радар фокуса', icon: Compass },
   { href: '/chat', label: 'AI Чат (OpenCode)', icon: BotMessageSquare },
   { href: '/projects', label: 'Проекты', icon: FolderGit2 },
@@ -38,12 +39,18 @@ export interface NavigationProps {
   children: React.ReactNode;
   extraNavItems?: NavItemConfig[];
   actionSlot?: React.ReactNode;
+  /**
+   * Куда ведёт «Радар фокуса» и логотип. В standalone-core дашборд на `/`,
+   * в коммерческом приложении — на `/app` (на `/` там лендинг).
+   */
+  homeHref?: string;
 }
 
 export default function Navigation({
   children,
   extraNavItems = [],
   actionSlot,
+  homeHref = '/',
 }: NavigationProps) {
   const pathname = usePathname();
   const router = useRouter();
@@ -54,7 +61,8 @@ export default function Navigation({
     return <>{children}</>;
   }
 
-  const navItems = [...DEFAULT_CORE_NAV_ITEMS, ...extraNavItems];
+  const [radarItem, ...restDefaultItems] = DEFAULT_CORE_NAV_ITEMS;
+  const navItems = [{ ...radarItem, href: homeHref }, ...restDefaultItems, ...extraNavItems];
 
   const handleLogout = async () => {
     try {
@@ -72,7 +80,7 @@ export default function Navigation({
       <aside className="hidden lg:flex w-64 flex-col border-r border-slate-800/80 bg-[#0c121e]/90 backdrop-blur-md sticky top-0 h-screen z-30">
         {/* Brand */}
         <div className="p-5 border-b border-slate-800/80 flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-3 group">
+          <Link href={homeHref} className="flex items-center gap-3 group">
             <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-cyan-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-cyan-500/20 group-hover:scale-105 transition-transform">
               <Radio className="w-5 h-5 text-white" />
             </div>
@@ -158,7 +166,7 @@ export default function Navigation({
       <div className="flex-1 flex flex-col min-w-0">
         {/* Mobile Header */}
         <header className="lg:hidden flex items-center justify-between p-4 border-b border-slate-800 bg-[#0c121e]/90 backdrop-blur-md sticky top-0 z-40">
-          <Link href="/" className="flex items-center gap-2">
+          <Link href={homeHref} className="flex items-center gap-2">
             <Radio className="w-5 h-5 text-cyan-400" />
             <span className="font-bold text-white text-sm">VISOR CORE</span>
             <span className="text-[10px] font-mono text-cyan-400/90 bg-slate-800 px-1 rounded">v{APP_VERSION}</span>

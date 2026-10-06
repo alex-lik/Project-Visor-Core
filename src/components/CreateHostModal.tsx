@@ -1,7 +1,9 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { X, Server, Zap, Check, AlertTriangle, Activity } from 'lucide-react';
+import { X, Server, Zap, Check, AlertTriangle, Activity, BookOpenText, ExternalLink } from 'lucide-react';
+
+export const OPENCODE_SERVER_DOCS_URL = 'https://opencode.ai/docs/server/';
 
 interface DiscoveredEndpoint {
   url: string;
@@ -391,6 +393,51 @@ export default function CreateHostModal({
             <p className="text-[11px] text-slate-400">
               Подключение к headless HTTP серверу OpenCode для автономного выполнения задач агентами над проектами этого узла.
             </p>
+
+            <details className="rounded-lg border border-slate-700/60 bg-slate-950/60 open:border-cyan-500/30 transition-colors">
+              <summary className="px-3 py-2 cursor-pointer text-[11px] font-semibold text-cyan-300 flex items-center gap-1.5 list-none [&::-webkit-details-marker]:hidden hover:text-cyan-200">
+                <BookOpenText className="w-3.5 h-3.5 shrink-0" />
+                Сначала запустите opencode serve на сервере — как настроить (инструкция)
+              </summary>
+              <div className="px-3 pb-3 pt-1 space-y-2 text-[11px] leading-relaxed text-slate-400">
+                <ol className="list-decimal list-inside space-y-1.5">
+                  <li>
+                    Установите OpenCode на целевом сервере и запустите headless-сервер:
+                    <code className="block mt-1 px-2 py-1 rounded bg-black/50 border border-slate-800 font-mono text-[11px] text-cyan-200 select-all">
+                      opencode serve --port 4096 --hostname 127.0.0.1
+                    </code>
+                    <span className="text-slate-500">
+                      Для доступа снаружи используйте --hostname 0.0.0.0 (только с паролем!). Дефолты: порт 4096, хост 127.0.0.1.
+                    </span>
+                  </li>
+                  <li>
+                    Защитите паролем (Basic Auth, логин по умолчанию — opencode):
+                    <code className="block mt-1 px-2 py-1 rounded bg-black/50 border border-slate-800 font-mono text-[11px] text-cyan-200 select-all">
+                      OPENCODE_SERVER_PASSWORD=ваш-пароль opencode serve
+                    </code>
+                    <span className="text-slate-500">
+                      Свой логин: OPENCODE_SERVER_USERNAME=имя. Эти же логин/пароль введите в поля ниже.
+                    </span>
+                  </li>
+                  <li>
+                    Проверьте, что API отвечает: откройте{' '}
+                    <code className="font-mono text-slate-300">http://ваш-хост:4096/doc</code> (OpenAPI-спека)
+                    или <code className="font-mono text-slate-300">GET /global/health</code> →{' '}
+                    <code className="font-mono text-slate-300">{'{ healthy: true, version }'}</code>.
+                  </li>
+                  <li>Вернитесь сюда: включите интеграцию, введите домен/IP, порт, логин/пароль и нажмите «Тест связи».</li>
+                </ol>
+                <a
+                  href={OPENCODE_SERVER_DOCS_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-cyan-300 hover:text-cyan-200 hover:underline font-medium"
+                >
+                  <ExternalLink className="w-3 h-3" />
+                  Официальная документация: opencode.ai/docs/server
+                </a>
+              </div>
+            </details>
 
             {opencodeEnabled && (
               <div className="space-y-3 pt-2 border-t border-cyan-950/60">
