@@ -52,9 +52,13 @@ interface Project {
 
 export interface ProjectsViewProps {
   actionSlot?: React.ReactNode;
+  /** Скрыть встроенную кнопку «Добавить проект» (когда страница передаёт единый unified-слот) */
+  hideCreateButton?: boolean;
+  /** Кастомная замена встроенной кнопки — например единое окно с табами (manual/AI/offline) */
+  createButtonSlot?: React.ReactNode;
 }
 
-export default function ProjectsView({ actionSlot }: ProjectsViewProps) {
+export default function ProjectsView({ actionSlot, hideCreateButton, createButtonSlot }: ProjectsViewProps) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -133,12 +137,14 @@ export default function ProjectsView({ actionSlot }: ProjectsViewProps) {
 
         <div className="flex items-center gap-2">
           {actionSlot}
-          <button
-            onClick={() => setIsModalOpen(true)}
-            className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-white text-sm font-semibold shadow-lg shadow-cyan-500/20 transition-all flex items-center gap-2"
-          >
-            <Plus className="w-4 h-4" /> Добавить проект
-          </button>
+          {createButtonSlot ?? (!hideCreateButton && (
+            <button
+              onClick={() => setIsModalOpen(true)}
+              className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-white text-sm font-semibold shadow-lg shadow-cyan-500/20 transition-all flex items-center gap-2"
+            >
+              <Plus className="w-4 h-4" /> Добавить проект
+            </button>
+          ))}
         </div>
       </div>
 

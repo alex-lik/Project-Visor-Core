@@ -28,6 +28,7 @@ export { default as Navigation } from './components/Navigation';
 export { default as OnboardingWizard } from './components/OnboardingWizard';
 export { default as CreateHostModal } from './components/CreateHostModal';
 export { default as CreateProjectModal } from './components/CreateProjectModal';
+export { default as ManualProjectForm } from './components/ManualProjectForm';
 export { default as CreateTaskModal } from './components/CreateTaskModal';
 export { default as CreateRelationModal } from './components/CreateRelationModal';
 export { default as CreateApiKeyModal } from './components/CreateApiKeyModal';

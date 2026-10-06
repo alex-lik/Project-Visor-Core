@@ -64,6 +64,7 @@ To prevent code duplication, Core views provide dedicated UI slots for injecting
 | View | Slot Prop | Purpose / Example Usage |
 |---|---|---|
 | `ProjectsView` | `actionSlot` | Add custom creation buttons (e.g. AI project generator). |
+| `ProjectsView` | `hideCreateButton` / `createButtonSlot` | Replace the built-in «Добавить проект» with a single unified button (e.g. modal with tabs). |
 | `InfrastructureView` | `headerActionSlot` | Add cloud provisioning buttons (e.g. 1-Click AWS/Hetzner). |
 | `ProjectDetailView` | `headerActionSlot` | Add custom buttons in Kanban header (e.g. Autopilot trigger). |
 | `ProjectDetailView` | `bannerSlot` | Render full-width notifications or active cycle progress strips. |
