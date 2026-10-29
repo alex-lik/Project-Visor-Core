@@ -18,12 +18,14 @@ import { formatDateTime } from '@/lib/utils';
 export default function ArchivedTasksModal({
   isOpen,
   projectId,
+  boardId,
   onClose,
   onTaskRestored,
   onTaskDeleted,
 }: {
   isOpen: boolean;
   projectId?: string;
+  boardId?: string;
   onClose: () => void;
   onTaskRestored: () => void;
   onTaskDeleted: () => void;
@@ -37,7 +39,9 @@ export default function ArchivedTasksModal({
     try {
       const q = new URLSearchParams();
       q.set('archived', 'only');
-      if (projectId && projectId !== 'all') {
+      if (boardId) {
+        q.set('boardId', boardId);
+      } else if (projectId && projectId !== 'all') {
         q.set('projectId', projectId);
       }
       const res = await fetch(`/api/kanban/tasks?${q.toString()}`);

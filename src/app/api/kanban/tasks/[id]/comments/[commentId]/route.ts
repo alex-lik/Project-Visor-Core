@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db';
 import { kanbanTasks, kanbanTaskComments } from '@/db/schema';
 import { authenticateRequest, isProjectAllowed } from '@/lib/rbac';
+import { isTaskAllowed } from '@/lib/kanban-access';
 import { eq, and } from 'drizzle-orm';
 
 export async function DELETE(
@@ -23,7 +24,7 @@ export async function DELETE(
     return NextResponse.json({ error: 'Задача не найдена' }, { status: 404 });
   }
 
-  if (!isProjectAllowed(auth, task.projectId)) {
+  if (!isProjectAllowed(auth, task.projectId || '') && !(await isTaskAllowed(auth, task))) {
     return NextResponse.json({ error: 'Доступ запрещен' }, { status: 403 });
   }
 

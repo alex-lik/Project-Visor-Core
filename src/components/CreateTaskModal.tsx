@@ -11,11 +11,14 @@ interface ProjectOption {
 export default function CreateTaskModal({
   isOpen,
   defaultProjectId,
+  boardId,
   onClose,
   onCreated,
 }: {
   isOpen: boolean;
   defaultProjectId?: string;
+  /** При заданном boardId задача создаётся прямо на этой доске (в т.ч. личной), селектор проекта скрыт */
+  boardId?: string;
   onClose: () => void;
   onCreated: () => void;
 }) {
@@ -52,6 +55,7 @@ export default function CreateTaskModal({
 
   useEffect(() => {
     if (isOpen) {
+      if (boardId) return;
       fetch('/api/projects')
         .then((r) => r.json())
         .then((d) => {
@@ -64,13 +68,13 @@ export default function CreateTaskModal({
         })
         .catch(() => {});
     }
-  }, [isOpen]);
+  }, [isOpen, boardId]);
 
   if (!isOpen) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!projectId) {
+    if (!boardId && !projectId) {
       setError('Выберите проект');
       return;
     }
@@ -110,7 +114,8 @@ export default function CreateTaskModal({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          projectId,
+          ...(boardId ? { boardId } : {}),
+          ...(!boardId ? { projectId } : {}),
           title,
           description,
           column,
@@ -167,21 +172,23 @@ export default function CreateTaskModal({
             </div>
           )}
 
-          <div>
-            <label className="block text-xs font-medium text-slate-300 mb-1.5">Проект</label>
-            <select
-              value={projectId}
-              onChange={(e) => setProjectId(e.target.value)}
-              disabled={Boolean(defaultProjectId)}
-              className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-white focus:outline-none focus:border-cyan-500 text-sm disabled:opacity-60"
-            >
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.title}
-                </option>
-              ))}
-            </select>
-          </div>
+          {!boardId && (
+            <div>
+              <label className="block text-xs font-medium text-slate-300 mb-1.5">Проект</label>
+              <select
+                value={projectId}
+                onChange={(e) => setProjectId(e.target.value)}
+                disabled={Boolean(defaultProjectId)}
+                className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-white focus:outline-none focus:border-cyan-500 text-sm disabled:opacity-60"
+              >
+                {projects.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.title}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <div>
             <label className="block text-xs font-medium text-slate-300 mb-1.5">

@@ -14,6 +14,7 @@ import {
   Sliders,
   CheckCircle2,
   ArrowLeftRight,
+  UserPlus,
 } from 'lucide-react';
 import TaskCard from './TaskCard';
 import TaskDetailModal, {
@@ -31,6 +32,8 @@ interface ProjectOption {
 
 export default function KanbanBoard({
   projectId,
+  boardId,
+  boardTitle,
   showProjectFilter = true,
   headerSlot,
   bannerSlot,
@@ -39,6 +42,9 @@ export default function KanbanBoard({
   onSendToOpenCode,
 }: {
   projectId?: string;
+  /** Режим личной (или иной конкретной) доски: должен быть boardId, а не projectId */
+  boardId?: string;
+  boardTitle?: string;
   showProjectFilter?: boolean;
   headerSlot?: React.ReactNode;
   bannerSlot?: React.ReactNode;
@@ -50,6 +56,7 @@ export default function KanbanBoard({
   const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>(projectId || 'all');
   const [loading, setLoading] = useState(true);
+  const [movingBoard, setMovingBoard] = useState(false);
 
   // Modals
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
@@ -76,13 +83,16 @@ export default function KanbanBoard({
     setLoading(true);
     try {
       const q = new URLSearchParams();
-      if (selectedProjectId && selectedProjectId !== 'all') {
+      if (boardId) {
+        q.set('boardId', boardId);
+      } else if (selectedProjectId && selectedProjectId !== 'all') {
         q.set('projectId', selectedProjectId);
       }
+      const scope = boardId ? `&boardId=${boardId}` : selectedProjectId && selectedProjectId !== 'all' ? `&projectId=${selectedProjectId}` : '';
       const [taskRes, projRes, archRes] = await Promise.all([
         fetch(`/api/kanban/tasks?${q.toString()}`),
         fetch('/api/projects'),
-        fetch(`/api/kanban/tasks?archived=only${selectedProjectId && selectedProjectId !== 'all' ? `&projectId=${selectedProjectId}` : ''}`),
+        fetch(`/api/kanban/tasks?archived=only${scope}`),
       ]);
 
       if (taskRes.ok) {
@@ -106,7 +116,7 @@ export default function KanbanBoard({
 
   useEffect(() => {
     fetchTasks();
-  }, [selectedProjectId]);
+  }, [selectedProjectId, boardId]);
 
   const handleMoveTask = async (taskId: string, newColumn: string) => {
     // Optimistic UI update
@@ -138,6 +148,40 @@ export default function KanbanBoard({
       onTasksChange?.();
     } catch (err) {
       console.error('Failed to archive task:', err);
+    }
+  };
+
+  // Перенос текущей проектной доски целиком в личное пространство (владелец проекта / админ)
+  const handleMakePersonal = async () => {
+    if (!projectId) return;
+    if (!confirm('Перенести эту доску в личное пространство? Задачи открепятся от проекта и будут видны только вам. Участники проекта доску больше не увидят.')) {
+      return;
+    }
+    setMovingBoard(true);
+    try {
+      const res = await fetch(`/api/kanban/boards?projectId=${projectId}`);
+      const data = res.ok ? await res.json() : null;
+      const board = data?.boards?.[0];
+      if (!board) {
+        alert('Не удалось найти доску проекта');
+        return;
+      }
+      const moveRes = await fetch(`/api/kanban/boards/${board.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'move_to_personal' }),
+      });
+      const moveData = moveRes.ok ? await moveRes.json().catch(() => null) : null;
+      if (moveRes.ok) {
+        alert(`Доска "${board.title}" перенесена в личное пространство. Откройте раздел «Задачи» → «Личные доски».`);
+        onTasksChange?.();
+      } else {
+        alert(moveData?.error || 'Не удалось перенести доску (нужно быть владельцем проекта или админом)');
+      }
+    } catch (err) {
+      console.error('Failed to move board to personal:', err);
+    } finally {
+      setMovingBoard(false);
     }
   };
 
@@ -197,7 +241,7 @@ export default function KanbanBoard({
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-900/60 p-3.5 rounded-2xl border border-slate-800">
         <div className="flex items-center gap-2.5 flex-wrap flex-1 min-w-0">
           {/* Project selector dropdown (if in global mode) */}
-          {showProjectFilter && !projectId && (
+          {showProjectFilter && !projectId && !boardId && (
             <select
               value={selectedProjectId}
               onChange={(e) => setSelectedProjectId(e.target.value)}
@@ -252,15 +296,31 @@ export default function KanbanBoard({
         <div className="flex items-center gap-2 shrink-0">
           {headerSlot}
 
+          {/* Перенос проектной доски в личное пространство */}
+          {projectId && !boardId && (
+            <button
+              type="button"
+              onClick={handleMakePersonal}
+              disabled={movingBoard}
+              className="px-3 py-1.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 hover:border-indigo-500/50 text-slate-300 hover:text-indigo-300 text-xs font-semibold flex items-center gap-1.5 transition-colors disabled:opacity-50"
+              title="Перенести доску проекта целиком в личное пространство (доступно владельцу проекта или админу)"
+            >
+              <UserPlus className={`w-3.5 h-3.5 text-indigo-400 ${movingBoard ? 'animate-pulse' : ''}`} />
+              <span>Сделать личной</span>
+            </button>
+          )}
+
           {/* Trello Sync entry: селективная синхронизация досок/списков */}
-          <Link
-            href="/settings/integrations"
-            className="px-3 py-1.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 hover:border-cyan-500/50 text-slate-300 hover:text-cyan-300 text-xs font-semibold flex items-center gap-1.5 transition-colors"
-            title="Настроить синхронизацию с Trello: выбор досок и списков"
-          >
-            <ArrowLeftRight className="w-3.5 h-3.5 text-cyan-400" />
-            <span>Trello Sync</span>
-          </Link>
+          {!boardId && (
+            <Link
+              href="/settings/integrations"
+              className="px-3 py-1.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 hover:border-cyan-500/50 text-slate-300 hover:text-cyan-300 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+              title="Настроить синхронизацию с Trello: выбор досок и списков"
+            >
+              <ArrowLeftRight className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Trello Sync</span>
+            </Link>
+          )}
 
           {/* Archive Button */}
           <button
@@ -346,7 +406,7 @@ export default function KanbanBoard({
                     <TaskCard
                       key={t.id}
                       task={t}
-                      showProjectChip={selectedProjectId === 'all' || !projectId}
+                      showProjectChip={!boardId && (selectedProjectId === 'all' || !projectId)}
                       onClick={() => setActiveTaskId(t.id)}
                       onMoveColumn={(newCol) => handleMoveTask(t.id, newCol)}
                       onArchive={() => handleQuickArchive(t.id)}
@@ -393,6 +453,7 @@ export default function KanbanBoard({
       <ArchivedTasksModal
         isOpen={isArchiveModalOpen}
         projectId={selectedProjectId !== 'all' ? selectedProjectId : undefined}
+        boardId={boardId}
         onClose={() => setIsArchiveModalOpen(false)}
         onTaskRestored={() => {
           fetchTasks();
@@ -407,8 +468,11 @@ export default function KanbanBoard({
       {/* Create Task Modal */}
       <CreateTaskModal
         isOpen={isCreateModalOpen}
+        boardId={boardId}
         defaultProjectId={
-          selectedProjectId && selectedProjectId !== 'all'
+          boardId
+            ? undefined
+            : selectedProjectId && selectedProjectId !== 'all'
             ? selectedProjectId
             : projectId || undefined
         }

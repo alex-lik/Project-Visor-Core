@@ -120,9 +120,23 @@ export async function ensureDatabaseInitialized() {
       );
       CREATE INDEX IF NOT EXISTS idx_custom_relation_types_user ON custom_relation_types(user_id);
 
+      CREATE TABLE IF NOT EXISTS kanban_boards (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL DEFAULT 'project',
+        project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+        owner_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        position INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_kanban_boards_project ON kanban_boards(project_id);
+      CREATE INDEX IF NOT EXISTS idx_kanban_boards_owner ON kanban_boards(owner_id);
+
       CREATE TABLE IF NOT EXISTS kanban_tasks (
         id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+        board_id TEXT,
         title TEXT NOT NULL,
         description TEXT,
         column TEXT NOT NULL DEFAULT 'todo',
@@ -226,6 +240,17 @@ export async function ensureDatabaseInitialized() {
       // column already exists
     }
     for (const sql of [
+      'ALTER TABLE kanban_tasks ADD COLUMN board_id TEXT;',
+      // Backfill: проектная доска каждому проекту + привязка legacy-задач без board_id
+      `INSERT INTO kanban_boards (id, kind, project_id, title, position, created_at, updated_at)
+        SELECT 'board_' || p.id, 'project', p.id, 'Доска: ' || p.title, 0, p.created_at, p.updated_at
+        FROM projects p
+        WHERE NOT EXISTS (SELECT 1 FROM kanban_boards kb WHERE kb.project_id = p.id AND kb.kind = 'project');`,
+      `UPDATE kanban_tasks SET board_id = (
+          SELECT b.id FROM kanban_boards b
+          WHERE b.kind = 'project' AND b.project_id = kanban_tasks.project_id
+        )
+        WHERE board_id IS NULL AND project_id IS NOT NULL;`,
       'ALTER TABLE kanban_tasks ADD COLUMN is_archived INTEGER DEFAULT 0;',
       'ALTER TABLE kanban_tasks ADD COLUMN color TEXT;',
       "ALTER TABLE kanban_tasks ADD COLUMN checklists TEXT DEFAULT '[]';",

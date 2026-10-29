@@ -84,7 +84,11 @@ export default function TaskCard({
           {showProjectChip && task.projectTitle && (
             <span
               onClick={(e) => e.stopPropagation()}
-              className="px-2 py-0.5 rounded text-[10px] font-mono font-medium bg-slate-950 text-cyan-400 border border-slate-800 truncate max-w-[140px]"
+              className={`px-2 py-0.5 rounded text-[10px] font-mono font-medium truncate max-w-[140px] ${
+                task.boardKind === 'personal'
+                  ? 'bg-indigo-950/70 text-indigo-300 border border-indigo-500/30'
+                  : 'bg-slate-950 text-cyan-400 border border-slate-800'
+              }`}
             >
               {task.projectTitle}
             </span>
@@ -123,7 +127,7 @@ export default function TaskCard({
             >
               <Zap className="w-3 h-3" />
             </button>
-          ) : (
+          ) : task.boardId && !task.projectId ? null : (
             <Link
               href={`/chat?projectId=${task.projectId}&taskId=${task.id}&taskTitle=${encodeURIComponent(task.title)}`}
               className="p-1 rounded text-cyan-400 hover:bg-cyan-500/20 hover:text-cyan-300 transition-colors"

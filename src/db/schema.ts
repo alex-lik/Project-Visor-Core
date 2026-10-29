@@ -114,9 +114,25 @@ export const customRelationTypes = sqliteTable('custom_relation_types', {
   createdAt: integer('created_at').notNull(),
 });
 
+// Канбан-доски: проектные (kind='project', привязаны к проекту) и личные
+// (kind='personal', привязаны к пользователю через ownerId, видны только ему и админам).
+export const kanbanBoards = sqliteTable('kanban_boards', {
+  id: text('id').primaryKey(),
+  kind: text('kind').notNull().default('project'), // 'project' | 'personal'
+  projectId: text('project_id').references(() => projects.id, { onDelete: 'cascade' }),
+  ownerId: text('owner_id').references(() => users.id, { onDelete: 'cascade' }),
+  title: text('title').notNull(),
+  position: integer('position').notNull().default(0),
+  createdAt: integer('created_at').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+});
+
 export const kanbanTasks = sqliteTable('kanban_tasks', {
   id: text('id').primaryKey(),
-  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  // null для личных задач (на личных досках пользователя)
+  projectId: text('project_id').references(() => projects.id, { onDelete: 'cascade' }),
+  // Доска, на которой лежит задача. Legacy-задачи без board_id считаются на проектной доске своего проекта.
+  boardId: text('board_id').references(() => kanbanBoards.id, { onDelete: 'cascade' }),
   title: text('title').notNull(),
   description: text('description'),
   column: text('column').notNull().default('todo'), // 'backlog' | 'todo' | 'in_progress' | 'review' | 'done' | 'blocked'
@@ -221,6 +237,8 @@ export type Deployment = typeof deployments.$inferSelect;
 export type InsertDeployment = typeof deployments.$inferInsert;
 export type ProjectRelation = typeof projectRelations.$inferSelect;
 export type InsertProjectRelation = typeof projectRelations.$inferInsert;
+export type KanbanBoard = typeof kanbanBoards.$inferSelect;
+export type InsertKanbanBoard = typeof kanbanBoards.$inferInsert;
 export type KanbanTask = typeof kanbanTasks.$inferSelect;
 export type InsertKanbanTask = typeof kanbanTasks.$inferInsert;
 export type KanbanTaskComment = typeof kanbanTaskComments.$inferSelect;

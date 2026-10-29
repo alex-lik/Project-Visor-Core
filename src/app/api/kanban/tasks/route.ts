@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db';
-import { kanbanTasks, kanbanTaskComments, projects, activityLogs } from '@/db/schema';
+import { kanbanTasks, kanbanTaskComments, kanbanBoards, projects, activityLogs } from '@/db/schema';
 import { authenticateRequest, isProjectAllowed } from '@/lib/rbac';
 import { dispatchNotification } from '@/lib/notifications';
+import { ensureProjectBoard, isBoardAllowed, isTaskAllowed } from '@/lib/kanban-access';
 import { nanoid } from 'nanoid';
-import { eq, desc } from 'drizzle-orm';
+import { eq, and, desc } from 'drizzle-orm';
 
 export async function GET(req: NextRequest) {
   const auth = await authenticateRequest(req);
@@ -14,6 +15,7 @@ export async function GET(req: NextRequest) {
 
   const { searchParams } = new URL(req.url);
   const projectId = searchParams.get('projectId');
+  const boardId = searchParams.get('boardId');
   const column = searchParams.get('column');
   const archived = searchParams.get('archived'); // 'only' | 'true' | 'false' (default: false)
 
@@ -21,9 +23,16 @@ export async function GET(req: NextRequest) {
   const allowedProjects = allProjects.filter((p) => isProjectAllowed(auth, p.id));
   const allowedIds = new Set(allowedProjects.map((p) => p.id));
 
+  // Доступные доски: проектные (по RBAC проектов) + личные (свои, для админов — все личные списком не нужны)
+  const allBoards = await db.select().from(kanbanBoards);
+  const allowedBoardIds = new Set(allBoards.filter((b) => isBoardAllowed(auth, b)).map((b) => b.id));
+
   let tasks = await db.select().from(kanbanTasks).orderBy(desc(kanbanTasks.updatedAt));
 
-  tasks = tasks.filter((t) => allowedIds.has(t.projectId));
+  // Доступ: через доску, либо legacy-фоллбек по проекту (задачи без board_id)
+  tasks = tasks.filter(
+    (t) => (t.boardId ? allowedBoardIds.has(t.boardId) : allowedIds.has(t.projectId || ''))
+  );
 
   // Filter by archive state
   if (archived === 'only') {
@@ -33,11 +42,19 @@ export async function GET(req: NextRequest) {
   }
 
   if (projectId) {
-    tasks = tasks.filter((t) => t.projectId === projectId);
+    tasks = tasks.filter((t) =>
+      t.projectId === projectId ||
+      (!!t.boardId && allBoards.some((b) => b.id === t.boardId && b.kind === 'project' && b.projectId === projectId))
+    );
+  }
+  if (boardId) {
+    tasks = tasks.filter((t) => t.boardId === boardId);
   }
   if (column) {
     tasks = tasks.filter((t) => t.column === column);
   }
+
+  const boardMap = new Map(allBoards.map((b) => [b.id, b]));
 
   // Fetch comments count map
   const allComments = await db
@@ -49,10 +66,11 @@ export async function GET(req: NextRequest) {
   }
 
   const enriched = tasks.map((t) => {
-    const p = allProjects.find((proj) => proj.id === t.projectId);
+    const p = t.projectId ? allProjects.find((proj) => proj.id === t.projectId) : undefined;
+    const board = t.boardId ? boardMap.get(t.boardId) : undefined;
     const parsedChecklists = (() => {
       try {
-        return JSON.parse((t as any).checklists || '[]');
+        return JSON.parse(t.checklists || '[]');
       } catch {
         return [];
       }
@@ -70,17 +88,25 @@ export async function GET(req: NextRequest) {
     }
 
     const calculatedProgress =
-      (t as any).progressMode === 'manual' && typeof (t as any).progress === 'number'
-        ? (t as any).progress
+      t.progressMode === 'manual' && typeof t.progress === 'number'
+        ? t.progress
         : totalChecklistItems > 0
         ? Math.round((completedChecklistItems / totalChecklistItems) * 100)
-        : typeof (t as any).progress === 'number'
-        ? (t as any).progress
+        : typeof t.progress === 'number'
+        ? t.progress
         : null;
+
+    const isPersonal = board?.kind === 'personal';
 
     return {
       ...t,
-      tags: JSON.parse(t.tags || '[]'),
+      tags: (() => {
+        try {
+          return JSON.parse(t.tags || '[]');
+        } catch {
+          return [];
+        }
+      })(),
       checklists: parsedChecklists,
       checklistStats: {
         total: totalChecklistItems,
@@ -88,9 +114,12 @@ export async function GET(req: NextRequest) {
       },
       effectiveProgress: calculatedProgress,
       commentsCount: commentCountMap[t.id] || 0,
-      projectTitle: p?.title || 'Unknown Project',
+      projectTitle: p?.title || (isPersonal ? 'Личное' : 'Unknown Project'),
       projectSlug: p?.slug || '',
       projectCategory: p?.category || 'system',
+      boardId: t.boardId || board?.id || null,
+      boardKind: board?.kind || 'project',
+      boardTitle: board?.title || '',
     };
   });
 
@@ -106,6 +135,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  if ((auth as any).isDemo === true) {
+    return NextResponse.json({ error: 'Демо-режим: изменение задач отключено (только просмотр мок-данных)' }, { status: 403 });
+  }
+
   if (!auth.canWriteKanban) {
     return NextResponse.json({ error: 'Forbidden: No permission to write to kanban' }, { status: 403 });
   }
@@ -113,7 +146,8 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const {
-      projectId,
+      projectId: projectIdInput,
+      boardId: boardIdInput,
       title,
       description,
       column = 'todo',
@@ -127,18 +161,35 @@ export async function POST(req: NextRequest) {
       assigneeName = null,
     } = body;
 
-    if (!projectId || !title) {
-      return NextResponse.json({ error: 'projectId и title обязательны' }, { status: 400 });
+    if (!title || (!projectIdInput && !boardIdInput)) {
+      return NextResponse.json({ error: 'projectId (или boardId) и title обязательны' }, { status: 400 });
     }
 
-    if (!isProjectAllowed(auth, projectId)) {
-      return NextResponse.json({ error: 'Доступ к проекту запрещен' }, { status: 403 });
+    let projectId: string | null = null;
+    let targetBoardId: string | null = null;
+
+    if (boardIdInput) {
+      const [board] = await db.select().from(kanbanBoards).where(eq(kanbanBoards.id, boardIdInput)).limit(1);
+      if (!board || !isBoardAllowed(auth, board)) {
+        return NextResponse.json({ error: 'Доступ к доске запрещен' }, { status: 403 });
+      }
+      targetBoardId = board.id;
+      projectId = board.kind === 'project' ? board.projectId : null;
+    } else {
+      projectId = projectIdInput;
+      if (!isProjectAllowed(auth, projectId!)) {
+        return NextResponse.json({ error: 'Доступ к проекту запрещен' }, { status: 403 });
+      }
+      // Лениво создаём/находим проектную доску и привязываем задачу к ней
+      const board = await ensureProjectBoard(projectId!);
+      targetBoardId = board.id;
     }
 
     const taskId = `task_${nanoid(10)}`;
     await db.insert(kanbanTasks).values({
       id: taskId,
       projectId,
+      boardId: targetBoardId,
       title,
       description: description || '',
       column,
@@ -170,14 +221,14 @@ export async function POST(req: NextRequest) {
       event: 'task_created',
       title: `Новая задача: "${title}"`,
       message: `Создана задача в колонке "${column}" с приоритетом "${priority}".\n${description || ''}`.trim(),
-      projectId,
+      projectId: projectId ?? undefined,
       userId: auth.userId || undefined,
       data: {
         taskTitle: title,
         column,
         priority,
       },
-      url: `/projects/${projectId}`,
+      url: projectId ? `/projects/${projectId}` : '/tasks',
     }).catch(() => {});
 
     return NextResponse.json({ success: true, taskId });

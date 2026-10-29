@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db';
 import { kanbanTasks, kanbanTaskComments, projects, activityLogs, users } from '@/db/schema';
 import { authenticateRequest, isProjectAllowed } from '@/lib/rbac';
+import { isTaskAllowed } from '@/lib/kanban-access';
 import { dispatchNotification } from '@/lib/notifications';
 import { eq, asc } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
@@ -21,7 +22,7 @@ export async function GET(
     return NextResponse.json({ error: 'Задача не найдена' }, { status: 404 });
   }
 
-  if (!isProjectAllowed(auth, task.projectId)) {
+  if (!isProjectAllowed(auth, task.projectId || '') && !(await isTaskAllowed(auth, task))) {
     return NextResponse.json({ error: 'Доступ запрещен' }, { status: 403 });
   }
 
@@ -53,7 +54,7 @@ export async function POST(
     return NextResponse.json({ error: 'Задача не найдена' }, { status: 404 });
   }
 
-  if (!isProjectAllowed(auth, task.projectId)) {
+  if (!isProjectAllowed(auth, task.projectId || '') && !(await isTaskAllowed(auth, task))) {
     return NextResponse.json({ error: 'Доступ запрещен' }, { status: 403 });
   }
 
@@ -103,7 +104,7 @@ export async function POST(
       actorType: authorType,
       actorName: authorName,
       action: 'task_comment_added',
-      projectId: task.projectId,
+      projectId: task.projectId ?? undefined,
       details: `Комментарий к задаче "${task.title}": ${content.slice(0, 60)}`,
       createdAt: now,
     });
@@ -113,7 +114,7 @@ export async function POST(
       event: 'task_comment_added',
       title: `Новый комментарий к задаче "${task.title}"`,
       message: `${authorName}: ${content.slice(0, 100)}`,
-      projectId: task.projectId,
+      projectId: task.projectId ?? undefined,
       userId: auth.userId || undefined,
       data: {
         taskId: task.id,
@@ -121,7 +122,7 @@ export async function POST(
         authorName,
         authorType,
       },
-      url: `/projects/${task.projectId}`,
+      url: task.projectId ? `/projects/${task.projectId}` : '/tasks',
     }).catch(() => {});
 
     return NextResponse.json({

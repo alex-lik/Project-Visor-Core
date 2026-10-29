@@ -35,9 +35,12 @@ import { nanoid } from 'nanoid';
 
 export interface KanbanTaskDetail {
   id: string;
-  projectId: string;
+  projectId: string | null; // null для личных задач (личные доски)
   projectTitle?: string;
   projectSlug?: string;
+  boardId?: string | null;
+  boardKind?: string; // 'project' | 'personal'
+  boardTitle?: string;
   title: string;
   description?: string | null;
   column: string;
@@ -193,6 +196,10 @@ export default function TaskDetailModal({
   const [tagInput, setTagInput] = useState('');
   const [isAddingTag, setIsAddingTag] = useState(false);
 
+  // Доступные доски — для переноса задачи между досками (проект ⇄ личное)
+  const [boards, setBoards] = useState<Array<{ id: string; kind: string; title: string }>>([]);
+  const [movingBoard, setMovingBoard] = useState(false);
+
   const fetchTaskDetails = async () => {
     if (!taskId) return;
     setLoading(true);
@@ -219,8 +226,18 @@ export default function TaskDetailModal({
   useEffect(() => {
     if (isOpen && taskId) {
       fetchTaskDetails();
+      // Список доступных досок (делаем лениво, раз при открытии)
+      fetch('/api/kanban/boards')
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (d?.boards) {
+            setBoards(d.boards);
+          }
+        })
+        .catch(() => {});
     } else {
       setTask(null);
+      setBoards([]);
       setIsEditingTitle(false);
       setIsEditingDesc(false);
       setIsAddingChecklist(false);
@@ -229,6 +246,30 @@ export default function TaskDetailModal({
   }, [isOpen, taskId]);
 
   if (!isOpen || !taskId) return null;
+
+  // Перенос задачи на другую доску (проектную или личную)
+  const handleMoveBoard = async (newBoardId: string) => {
+    if (!taskId || !newBoardId || newBoardId === task?.boardId) return;
+    setMovingBoard(true);
+    try {
+      const res = await fetch(`/api/kanban/tasks/${taskId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ boardId: newBoardId }),
+      });
+      if (res.ok) {
+        await fetchTaskDetails();
+        onTaskUpdated();
+      } else {
+        const data = await res.json().catch(() => null);
+        alert(data?.error || 'Не удалось переместить задачу на доску');
+      }
+    } catch (err) {
+      console.error('Failed to move task to board:', err);
+    } finally {
+      setMovingBoard(false);
+    }
+  };
 
   // Save task patch
   const saveTaskPatch = async (patch: Partial<KanbanTaskDetail>) => {
@@ -455,7 +496,7 @@ export default function TaskDetailModal({
           <div className="flex-1 min-w-0">
             {/* Project Chip and Column Breadcrumbs */}
             <div className="flex items-center gap-2 flex-wrap text-xs mb-2">
-              {task?.projectTitle && (
+              {task?.projectTitle && task?.projectId && (
                 <Link
                   href={`/projects/${task.projectId}`}
                   className="px-2.5 py-0.5 rounded-md font-mono font-medium bg-slate-950 text-cyan-400 border border-slate-800 hover:border-cyan-500/50 flex items-center gap-1 transition-colors"
@@ -463,6 +504,44 @@ export default function TaskDetailModal({
                   <Layers className="w-3 h-3 text-cyan-400" />
                   <span>{task.projectTitle}</span>
                 </Link>
+              )}
+              {task?.boardTitle && (
+                <span
+                  className={`px-2.5 py-0.5 rounded-md font-mono font-medium border ${
+                    task.boardKind === 'personal'
+                      ? 'bg-indigo-950/60 text-indigo-300 border-indigo-500/40'
+                      : 'bg-slate-950 text-slate-400 border-slate-800'
+                  } flex items-center gap-1`}
+                  title={task.boardKind === 'personal' ? 'Личная доска' : 'Проектная доска'}
+                >
+                  {task.boardKind === 'personal' ? '👤' : '📁'}
+                  <span>{task.boardTitle}</span>
+                </span>
+              )}
+              {boards.length > 0 && (
+                <select
+                  value={task?.boardId || ''}
+                  disabled={movingBoard}
+                  onChange={(e) => {
+                    if (e.target.value && e.target.value !== task?.boardId) {
+                      handleMoveBoard(e.target.value);
+                    }
+                    e.target.value = task?.boardId || '';
+                  }}
+                  className="px-2 py-0.5 rounded-md bg-slate-950 border border-slate-800 text-[10px] font-mono text-slate-300 hover:border-cyan-500/50 focus:outline-none max-w-[220px] truncate disabled:opacity-50"
+                  title="Переместить задачу на другую доску (проект ⇄ личное)"
+                >
+                  <option value="" disabled>
+                    ⟶ Переместить на доску…
+                  </option>
+                  {boards
+                    .filter((b) => b.id !== (task?.boardId || ''))
+                    .map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.kind === 'personal' ? `👤 ${b.title}` : `📁 ${b.title}`}
+                      </option>
+                    ))}
+                </select>
               )}
               <span className="text-slate-600">/</span>
               <span className="text-slate-400 font-mono">
@@ -562,14 +641,14 @@ export default function TaskDetailModal({
                   >
                     Перейти в диалог
                   </button>
-                ) : (
+                ) : task?.projectId ? (
                   <Link
                     href={`/chat?projectId=${task.projectId}&taskId=${task.id}&taskTitle=${encodeURIComponent(task.title)}`}
                     className="px-3 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs shrink-0 transition-colors shadow-sm"
                   >
                     Перейти в диалог
                   </Link>
-                )}
+                ) : null}
               </div>
             )}
 
@@ -1222,7 +1301,7 @@ export default function TaskDetailModal({
                   <Zap className="w-3.5 h-3.5" />
                   <span>Открыть в OpenCode</span>
                 </button>
-              ) : (
+              ) : task?.projectId ? (
                 <Link
                   href={`/chat?projectId=${task?.projectId}&taskId=${task?.id}&taskTitle=${encodeURIComponent(task?.title || '')}`}
                   className="w-full py-2 px-3 rounded-lg bg-gradient-to-r from-cyan-500 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 transition-all shadow-md shadow-cyan-500/20"
@@ -1230,7 +1309,7 @@ export default function TaskDetailModal({
                   <Zap className="w-3.5 h-3.5" />
                   <span>Открыть в OpenCode</span>
                 </Link>
-              )}
+              ) : null}
             </div>
 
             {/* Archive / Delete Actions */}
