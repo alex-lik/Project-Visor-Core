@@ -31,7 +31,19 @@ export default function CreateApiKeyModal({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [createdKey, setCreatedKey] = useState<string | null>(null);
+  const [createdName, setCreatedName] = useState('');
   const [copied, setCopied] = useState(false);
+
+  // Пресет «Pi display»: read-only токен для Raspberry Pi клиента.
+  // Устанавливает безопасные права (без записи) одним кликом.
+  const applyPiPreset = () => {
+    setName('Pi display (Raspberry Pi, read-only)');
+    setCanWriteKanban(false);
+    setCanUpdateStatus(false);
+    setCanViewInfra(false);
+  };
+
+  const isReadOnlyPreset = !canWriteKanban && !canUpdateStatus && !canViewInfra;
 
   useEffect(() => {
     if (isOpen) {
@@ -93,6 +105,7 @@ export default function CreateApiKeyModal({
       if (!res.ok) throw new Error(data.error || 'Ошибка создания ключа');
 
       setCreatedKey(data.rawKey);
+      setCreatedName(data.name || name);
       onCreated();
     } catch (err: any) {
       setError(err.message);
@@ -140,6 +153,18 @@ export default function CreateApiKeyModal({
               </button>
             </div>
 
+            <div className="p-3.5 bg-slate-950 border border-slate-800 rounded-xl space-y-2">
+              <div className="text-xs font-semibold text-slate-200">Для Raspberry Pi (`.env` клиента):</div>
+              <pre className="font-mono text-[11px] text-slate-400 whitespace-pre-wrap break-all">{`VISOR_URL=https://project-visor.pro-it.top
+VISOR_TOKEN=${createdKey}
+VISOR_MODE=all
+VISOR_BOARD_ID=
+VISOR_REFRESH=30`}</pre>
+              <div className="text-[11px] text-slate-500">
+                Файл `pi-client/.env.example` — образец, установка: <code className="text-slate-300">bash pi-client/install.sh</code>.
+              </div>
+            </div>
+
             <div className="pt-3 border-t border-slate-800 flex justify-end">
               <button
                 onClick={onClose}
@@ -158,9 +183,23 @@ export default function CreateApiKeyModal({
             )}
 
             <div>
-              <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                Назначение / Имя агента <span className="text-rose-400">*</span>
-              </label>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-xs font-medium text-slate-300">
+                  Назначение / Имя агента <span className="text-rose-400">*</span>
+                </label>
+                <button
+                  type="button"
+                  onClick={applyPiPreset}
+                  className={`px-2 py-1 rounded-lg text-[11px] font-semibold transition-colors ${
+                    isReadOnlyPreset
+                      ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40'
+                      : 'bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700'
+                  }`}
+                  title="Read-only токен для Raspberry Pi клиента"
+                >
+                  🖥 Pi display (read-only)
+                </button>
+              </div>
               <input
                 type="text"
                 required
